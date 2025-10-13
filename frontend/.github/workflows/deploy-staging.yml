@@ -1,0 +1,24 @@
+name: Deploy Staging
+on:
+  push:
+    branches: [ master ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.30.2'
+      - name: Kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBECONFIG_CONTENT" > ~/.kube/config
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG_CONTENT }}
+      - name: Apply Manifests
+        run: |
+          kubectl apply -f infra/k8s/staging/ai-core-deployment.yaml
+          kubectl apply -f infra/k8s/staging/frontend-deployment.yaml
+

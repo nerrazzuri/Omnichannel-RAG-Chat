@@ -1,0 +1,8 @@
+{
+  "tenant_id": "00000000-0000-0000-0000-000000000001",
+  "document_id": "5ccf712d-3ee5-4bc3-8eef-b9477f18e6fe",
+  "knowledge_base_id": "00000000-0000-0000-0000-000000000000",
+  "title": "HRDataset_v14.csv",
+  "chunk_count": 128,
+  "status": "INDEXED"
+}
