@@ -1,0 +1,25 @@
+﻿# omnichannel_chatbot Development Guidelines
+
+Auto-generated from all feature plans. Last updated: 2025-10-13
+
+## Active Technologies
+- Python 3.11 (FastAPI backend), TypeScript/Node.js 20 (NestJS services, Next.js frontend) + FastAPI, LangChain, OpenAI/Azure OpenAI, NestJS, Next.js, PostgreSQL, Redis, Qdrant (001-specify)
+
+## Project Structure
+```
+backend/
+frontend/
+tests/
+```
+
+## Commands
+cd src; pytest; ruff check .
+
+## Code Style
+Python 3.11 (FastAPI backend), TypeScript/Node.js 20 (NestJS services, Next.js frontend): Follow standard conventions
+
+## Recent Changes
+- 001-specify: Added Python 3.11 (FastAPI backend), TypeScript/Node.js 20 (NestJS services, Next.js frontend) + FastAPI, LangChain, OpenAI/Azure OpenAI, NestJS, Next.js, PostgreSQL, Redis, Qdrant
+
+<!-- MANUAL ADDITIONS START -->
+<!-- MANUAL ADDITIONS END -->

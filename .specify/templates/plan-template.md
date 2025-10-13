@@ -31,7 +31,30 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+**Multi-Tenant Architecture**:
+- Design must ensure tenant data isolation at all system layers
+- Shared state between tenants only through audited APIs
+- Configuration management must support per-tenant customization
+
+**RAG-First Knowledge Systems**:
+- All conversational responses must use Retrieval-Augmented Generation
+- Knowledge base integrity and real-time updates required
+- Clear attribution for all AI-generated responses
+
+**Omnichannel Integration**:
+- Consistent conversational experiences across all channels
+- Native interface paradigms maintained per channel
+- Conversation context preservation across channel switches
+
+**Enterprise Security & Compliance**:
+- End-to-end encryption and comprehensive audit logging
+- Role-based access control (RBAC) implementation
+- Compliance with SOC2, GDPR, HIPAA frameworks
+
+**Scalable Architecture**:
+- Horizontal scalability across all components
+- <500ms response time for 95% of interactions
+- Support for 10,000+ concurrent conversations per tenant
 
 ## Project Structure
 

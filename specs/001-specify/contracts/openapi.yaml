@@ -1,0 +1,444 @@
+openapi: 3.0.3
+info:
+  title: Omnichannel Enterprise RAG Chatbot Platform API
+  description: Enterprise-grade conversational AI platform with multi-tenant RAG capabilities
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: api-support@company.com
+
+servers:
+  - url: https://api.company.com/v1
+    description: Production server
+  - url: https://staging-api.company.com/v1
+    description: Staging server
+  - url: http://localhost:8000/v1
+    description: Development server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: "VALIDATION_ERROR"
+            message:
+              type: string
+              example: "Invalid request parameters"
+            details:
+              type: object
+              additionalProperties: true
+
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        name:
+          type: string
+          example: "Acme Corporation"
+        domain:
+          type: string
+          example: "acme"
+        subscription_tier:
+          type: string
+          enum: [BASIC, PROFESSIONAL, ENTERPRISE]
+        created_at:
+          type: string
+          format: date-time
+
+    QueryRequest:
+      type: object
+      required:
+        - tenant_id
+        - message
+        - channel
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: "Tenant identifier for multi-tenant isolation"
+        user_id:
+          type: string
+          format: uuid
+          description: "User identifier (optional for anonymous users)"
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: "User's message or query"
+        channel:
+          type: string
+          enum: [whatsapp, wechat, line, telegram, web, teams]
+          description: "Communication channel"
+        context:
+          type: object
+          properties:
+            conversation_id:
+              type: string
+              format: uuid
+              description: "Existing conversation ID for context continuity"
+            language:
+              type: string
+              enum: [en, zh, ja, ko, th]
+              default: en
+              description: "User's preferred language"
+            metadata:
+              type: object
+              additionalProperties: true
+              description: "Channel-specific context data"
+
+    QueryResponse:
+      type: object
+      properties:
+        response:
+          type: string
+          description: "AI-generated response with RAG context"
+          example: "Based on your question about product features, here's what I found in our knowledge base..."
+        citations:
+          type: array
+          items:
+            type: object
+            properties:
+              source:
+                type: string
+                description: "Document or knowledge base source identifier"
+              title:
+                type: string
+                description: "Human-readable source title"
+              relevance:
+                type: number
+                format: float
+                minimum: 0
+                maximum: 1
+                description: "Relevance score of this source"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: "System confidence in the response accuracy"
+        requires_human:
+          type: boolean
+          description: "Whether the query should be escalated to human support"
+        conversation_id:
+          type: string
+          format: uuid
+          description: "Unique identifier for this conversation session"
+
+    UploadRequest:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            type: string
+            format: binary
+          description: "Document files to upload (PDF, DOCX, TXT)"
+          maxItems: 10
+        metadata:
+          type: object
+          properties:
+            category:
+              type: string
+              enum: [product_docs, policies, training, faq]
+              description: "Document category for organization"
+            tags:
+              type: array
+              items:
+                type: string
+              description: "Tags for document classification"
+            visibility:
+              type: string
+              enum: [public, internal, restricted]
+              default: internal
+
+    UploadResponse:
+      type: object
+      properties:
+        upload_id:
+          type: string
+          format: uuid
+          description: "Unique identifier for this upload batch"
+        status:
+          type: string
+          enum: [processing, completed, failed]
+          description: "Current processing status"
+        documents_processed:
+          type: integer
+          description: "Number of documents successfully processed"
+        chunks_created:
+          type: integer
+          description: "Number of knowledge chunks created from documents"
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              file:
+                type: string
+              error:
+                type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: "Overall system health status"
+        services:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [up, down]
+            cache:
+              type: string
+              enum: [up, down]
+            vector_store:
+              type: string
+              enum: [up, down]
+            ai_service:
+              type: string
+              enum: [up, down]
+        timestamp:
+          type: string
+          format: date-time
+        version:
+          type: string
+          description: "API version"
+
+paths:
+  /query:
+    post:
+      summary: "Process conversational query with RAG"
+      description: "Accepts user messages from any channel and returns AI-generated responses with knowledge base citations"
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: "Successful response with AI-generated answer and citations"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "400":
+          description: "Bad request - invalid parameters"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: "Unauthorized - invalid or missing authentication"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: "Rate limited - too many requests"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /health:
+    get:
+      summary: "System health check"
+      description: "Returns the health status of all system components for monitoring purposes"
+      responses:
+        "200":
+          description: "System health information"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: "Service unavailable"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /tenant/{tenantId}/upload:
+    post:
+      summary: "Upload knowledge base documents"
+      description: "Upload and process documents to add to the tenant's knowledge base for RAG queries"
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: "Tenant identifier"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/UploadRequest"
+      responses:
+        "202":
+          description: "Upload accepted for processing"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResponse"
+        "400":
+          description: "Bad request - invalid file or parameters"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: "Unauthorized - insufficient permissions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: "Payload too large - file size exceeds limits"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /tenant/{tenantId}/knowledge:
+    get:
+      summary: "List knowledge base documents"
+      description: "Retrieve list of documents in the tenant's knowledge base"
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [product_docs, policies, training, faq]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: "List of knowledge base documents"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        title:
+                          type: string
+                        category:
+                          type: string
+                        status:
+                          type: string
+                        chunk_count:
+                          type: integer
+                        created_at:
+                          type: string
+                          format: date-time
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /conversations/{conversationId}:
+    get:
+      summary: "Get conversation history"
+      description: "Retrieve the message history for a specific conversation"
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: "Conversation message history"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversation_id:
+                    type: string
+                    format: uuid
+                  messages:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        sender_type:
+                          type: string
+                          enum: [USER, SYSTEM, HUMAN_AGENT]
+                        content:
+                          type: string
+                        timestamp:
+                          type: string
+                          format: date-time
+                  status:
+                    type: string
+                    enum: [ACTIVE, COMPLETED, ESCALATED]

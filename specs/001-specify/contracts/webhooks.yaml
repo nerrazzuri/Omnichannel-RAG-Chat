@@ -1,0 +1,252 @@
+# Channel Webhook Contracts: Omnichannel Enterprise RAG Chatbot Platform
+
+## WhatsApp Business API Webhook
+
+**Endpoint**: `POST /webhooks/whatsapp`
+
+**Headers**:
+```
+X-Hub-Signature-256: sha256=abc123...
+```
+
+**Request Body**:
+```json
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "whatsapp_business_account_id",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "1234567890",
+              "phone_number_id": "phone_number_id"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "John Doe"
+                },
+                "wa_id": "1234567890"
+              }
+            ],
+            "messages": [
+              {
+                "from": "1234567890",
+                "id": "message_id",
+                "timestamp": "1675620000",
+                "type": "text",
+                "text": {
+                  "body": "Hello, I need help with my order"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Platform-Specific Processing**:
+- Extract `wa_id` as user identifier
+- Map `display_phone_number` to tenant configuration
+- Handle different message types (text, image, document, location)
+
+## Microsoft Teams Webhook
+
+**Endpoint**: `POST /webhooks/teams`
+
+**Headers**:
+```
+Authorization: Bearer <bot_token>
+```
+
+**Request Body**:
+```json
+{
+  "type": "message",
+  "id": "message_id",
+  "timestamp": "2023-01-01T00:00:00.000Z",
+  "serviceUrl": "https://smba.trafficmanager.net/amer/",
+  "channelId": "channel_id",
+  "from": {
+    "id": "user_id",
+    "name": "John Doe",
+    "role": "user"
+  },
+  "conversation": {
+    "id": "conversation_id",
+    "name": "Team Name"
+  },
+  "recipient": {
+    "id": "bot_id",
+    "name": "Bot Name"
+  },
+  "text": "Hello, I need help with my project",
+  "attachments": [],
+  "entities": []
+}
+```
+
+**Platform-Specific Processing**:
+- Extract `from.id` as user identifier within Teams context
+- Map `channelId` and `conversation.id` to tenant and conversation context
+- Handle Teams-specific message formatting and mentions
+
+## Telegram Bot API Webhook
+
+**Endpoint**: `POST /webhooks/telegram`
+
+**Request Body**:
+```json
+{
+  "update_id": 123456789,
+  "message": {
+    "message_id": 1234,
+    "from": {
+      "id": 123456789,
+      "is_bot": false,
+      "first_name": "John",
+      "last_name": "Doe",
+      "username": "johndoe",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 123456789,
+      "first_name": "John",
+      "last_name": "Doe",
+      "username": "johndoe",
+      "type": "private"
+    },
+    "date": 1675620000,
+    "text": "Hi, I need information about your services",
+    "entities": []
+  }
+}
+```
+
+**Platform-Specific Processing**:
+- Extract `from.id` as user identifier
+- Map `chat.id` to conversation context
+- Handle Telegram-specific entities (mentions, hashtags, URLs)
+
+## WeChat Official Account Webhook
+
+**Endpoint**: `POST /webhooks/wechat`
+
+**Headers**:
+```
+X-Wechat-Signature: sha1_signature
+```
+
+**Request Body**:
+```xml
+<xml>
+  <ToUserName><![CDATA[gh_123456789]]></ToUserName>
+  <FromUserName><![CDATA[o123456789]]></FromUserName>
+  <CreateTime>1675620000</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[Hello, I need help]]></Content>
+  <MsgId>123456789</MsgId>
+</xml>
+```
+
+**Platform-Specific Processing**:
+- Extract `FromUserName` as user identifier
+- Map `ToUserName` to account configuration
+- Handle WeChat-specific message types and encryption
+
+## LINE Business API Webhook
+
+**Endpoint**: `POST /webhooks/line`
+
+**Headers**:
+```
+X-Line-Signature: signature
+```
+
+**Request Body**:
+```json
+{
+  "destination": "user_id",
+  "events": [
+    {
+      "type": "message",
+      "message": {
+        "type": "text",
+        "id": "message_id",
+        "text": "Hello, I need assistance"
+      },
+      "timestamp": 1675620000000,
+      "source": {
+        "type": "user",
+        "userId": "user_id"
+      },
+      "replyToken": "reply_token",
+      "mode": "active"
+    }
+  ]
+}
+```
+
+**Platform-Specific Processing**:
+- Extract `source.userId` as user identifier
+- Map `destination` to account configuration
+- Handle LINE-specific reply tokens and message types
+
+## Web Chat Widget API
+
+**Endpoint**: `POST /api/chat/message`
+
+**Headers**:
+```
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+```
+
+**Request Body**:
+```json
+{
+  "tenant_id": "tenant_uuid",
+  "user_id": "user_uuid",
+  "message": "Hello, I need help with my account",
+  "context": {
+    "session_id": "session_uuid",
+    "user_agent": "Mozilla/5.0...",
+    "language": "en",
+    "timezone": "America/New_York"
+  }
+}
+```
+
+**Platform-Specific Processing**:
+- Extract JWT claims for user and tenant identification
+- Map session_id to conversation context
+- Handle web-specific metadata (user agent, referrer, etc.)
+
+## Common Webhook Processing Pipeline
+
+1. **Signature Verification**: Validate webhook authenticity using platform-specific signatures
+2. **User Identification**: Extract user identifier from platform-specific user object
+3. **Tenant Mapping**: Determine tenant context from channel configuration
+4. **Message Normalization**: Convert platform-specific message format to internal format
+5. **Context Preservation**: Maintain conversation state across webhook calls
+6. **Response Routing**: Format and send response back through appropriate channel API
+
+## Error Handling
+
+**Retry Policy**:
+- Exponential backoff for transient failures
+- Maximum 3 retry attempts for webhook delivery
+- Dead letter queue for permanent failures
+
+**Platform-Specific Error Responses**:
+- WhatsApp: Return appropriate error codes for message delivery failures
+- Teams: Send error cards with retry options
+- Telegram: Use webhook error responses for retry requests
+- Web: Return HTTP error codes with retry-after headers
