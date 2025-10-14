@@ -2,8 +2,8 @@
   "/_app": "pages/_app.js",
   "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/chat": "pages/chat.js",
   "/admin/UploadDocument": "pages/admin/UploadDocument.js",
+  "/chat": "pages/chat.js",
   "/api/tenant/upload_file": "pages/api/tenant/upload_file.js",
   "/api/query": "pages/api/query.js"
 }

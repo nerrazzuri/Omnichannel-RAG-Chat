@@ -119,10 +119,12 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
     def detect_requested_field(q: str):
         ql = q.lower()
         mapping = {
-            'salary': ['salary', 'annualsalary', 'salaryamount', 'pay'],
-            'department': ['department', 'dept'],
-            'manager': ['manager', 'managername'],
-            'employmentstatus': ['employmentstatus', 'status'],
+            'salary': ['salary', 'annualsalary', 'salaryamount', 'pay', 'compensation', 'wage', 'earning'],
+            'department': ['department', 'dept', 'division', 'team', 'unit'],
+            'manager': ['manager', 'managername', 'supervisor', 'boss', 'reports to', 'reporting manager'],
+            'employmentstatus': ['employmentstatus', 'status', 'employment status', 'work status'],
+            'position': ['position', 'title', 'job title', 'role', 'designation'],
+            'location': ['location', 'office', 'site', 'workplace', 'based in'],
         }
         for key, terms in mapping.items():
             if any(t in ql for t in terms):
@@ -141,25 +143,23 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         person_names = name_variants(person_name_raw)
 
         field_aliases = {
-            'salary': ['salary', 'annualsalary', 'salaryamount', 'pay', 'basepay', 'base_salary'],
-            'department': ['department', 'dept'],
-            'manager': ['manager', 'managername'],
-            'employmentstatus': ['employmentstatus', 'status'],
+            'salary': ['salary', 'annualsalary', 'salaryamount', 'pay', 'basepay', 'base_salary', 'compensation', 'wage', 'earning'],
+            'department': ['department', 'dept', 'division', 'team', 'unit'],
+            'manager': ['manager', 'managername', 'supervisor', 'boss', 'reporting_manager'],
+            'employmentstatus': ['employmentstatus', 'status', 'employment_status', 'work_status'],
+            'position': ['position', 'title', 'job_title', 'role', 'designation', 'jobtitle'],
+            'location': ['location', 'office', 'site', 'workplace', 'state', 'city'],
         }
 
-        # Compute embedding similarity to rank candidates
-        emb_service = DocumentService(db)
-        qvec = np.array(emb_service.embed([payload.message])[0], dtype=float)
-
-        best_value = None
-        best_row_text = None
-        best_sim = -1.0
+        # First pass: find exact name matches
+        matching_rows = []
         for i, cand in enumerate(corpus):
             cols = corpus_columns[i]
             if not cols:
                 continue
             values = parse_csv_row(cand)
             col_to_val = {cols[j]: values[j] if j < len(values) else '' for j in range(len(cols))}
+            
             # Determine row name
             name_cols = ['employee_name', 'name', 'employee', 'empname', 'full_name', 'employee_full_name']
             row_name = None
@@ -167,34 +167,86 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 if nc in col_to_val and str(col_to_val[nc]).strip() != '':
                     row_name = norm_name(str(col_to_val[nc]))
                     break
+            
+            # Check if this row matches the requested person
+            is_match = False
             if row_name:
-                if row_name not in {norm_name(v) for v in person_names}:
-                    continue
-            else:
-                # Fallback: attempt to find exact full-name match in any cell
-                row_match = False
+                # Check against all name variants
+                for variant in person_names:
+                    if row_name == norm_name(variant):
+                        is_match = True
+                        break
+            
+            if not is_match:
+                # Fallback: check if any cell contains the exact name
                 person_norms = {norm_name(v) for v in person_names}
                 for v in values:
                     if norm_name(str(v)) in person_norms:
-                        row_match = True
+                        is_match = True
                         break
-                if not row_match:
-                    continue
-            # Extract requested field
-            for key in field_aliases.get(requested, []):
+            
+            if is_match:
+                matching_rows.append((i, cand, col_to_val))
+        
+        # If no exact matches found, return error
+        if not matching_rows:
+            no_match = {
+                "response": f"I couldn't find any records for {person_name_raw}. Please verify the name spelling or check if this person exists in the employee database.",
+                "citations": [],
+                "confidence": 0.0,
+                "requiresHuman": True,
+            }
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_match["response"])
+            return QueryResponse(**no_match)
+        
+        # Second pass: extract the requested field from matching rows
+        best_value = None
+        best_row_text = None
+        best_score = -1.0
+        
+        for row_idx, row_text, col_to_val in matching_rows:
+            # Look for the requested field
+            for key in field_aliases.get(requested, [requested]):
                 k = norm_col(key)
                 if k in col_to_val and str(col_to_val[k]).strip() != '':
-                    rvec = np.array(row_embeddings[i], dtype=float)
-                    denom = (np.linalg.norm(qvec) * np.linalg.norm(rvec)) or 1.0
-                    sim = float(np.dot(qvec, rvec) / denom)
-                    if sim > best_sim:
-                        best_sim = sim
+                    # Use a simple scoring based on field presence (1.0 for exact match)
+                    score = 1.0
+                    if score > best_score:
+                        best_score = score
                         best_value = str(col_to_val[k]).strip()
-                        best_row_text = cand
+                        best_row_text = row_text
                     break
         if best_value:
+            # Format the response in a human-readable way
+            person_display_name = person_name_raw
+            
+            # Format response based on the field type
+            if requested == 'salary':
+                # Format salary with currency symbol and thousands separator
+                try:
+                    salary_num = float(best_value.replace(',', '').replace('$', ''))
+                    formatted_salary = f"${salary_num:,.0f}"
+                    response_text = f"The salary of {person_display_name} is {formatted_salary}."
+                except:
+                    # Fallback if salary is not a number
+                    response_text = f"The salary of {person_display_name} is {best_value}."
+            elif requested == 'department':
+                response_text = f"The department of {person_display_name} is {best_value}."
+            elif requested == 'manager':
+                response_text = f"The manager of {person_display_name} is {best_value}."
+            elif requested == 'employmentstatus':
+                response_text = f"The employment status of {person_display_name} is {best_value}."
+            elif requested == 'position':
+                response_text = f"{person_display_name} works as a {best_value}."
+            elif requested == 'location':
+                response_text = f"{person_display_name} is located in {best_value}."
+            else:
+                # Generic format for other fields
+                field_display = requested.replace('_', ' ').title()
+                response_text = f"The {field_display.lower()} of {person_display_name} is {best_value}."
+            
             response_payload = {
-                "response": f"{requested.capitalize()}: {best_value}",
+                "response": response_text,
                 "citations": [{"source": "row", "title": "Matched record", "relevance": 0.99, "snippet": best_row_text[:160]}],
                 "confidence": 0.9,
                 "requiresHuman": False,
@@ -202,8 +254,9 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             conversation_service.add_message(conversation, sender_type="SYSTEM", content=response_payload["response"])
             return QueryResponse(**response_payload)
         # Avoid falling back to generic RAG when a specific field was requested but not found
+        field_display = requested.replace('_', ' ').title()
         no_match = {
-            "response": "No matching record found for the requested person and field. Please confirm the name spelling and column headers (e.g., Employee_Name, Salary).",
+            "response": f"I found {person_name_raw} in the database, but their {field_display.lower()} information is not available or empty in the records.",
             "citations": [],
             "confidence": 0.0,
             "requiresHuman": True,

@@ -28,15 +28,64 @@ async def upload_document_file(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    data = await file.read()
-    svc = DocumentService(db)
-    name = file.filename.lower()
-    if name.endswith('.csv') or name.endswith('.xlsx'):
-        rows = svc.extract_rows_from_file(file.filename, data)
-        doc_id, chunk_count = svc.process_rows_and_store(tenantId, title, rows, knowledgeBaseId)
-    else:
-        extracted = svc.extract_text_from_file(file.filename, data)
-        doc_id, chunk_count = svc.process_and_store(tenantId, title, extracted, knowledgeBaseId)
-    return DocumentUploadResponse(documentId=doc_id, chunkCount=chunk_count, status="INDEXED")
+    try:
+        # Validate inputs
+        if not tenantId:
+            raise HTTPException(status_code=400, detail="tenantId is required")
+        if not title:
+            raise HTTPException(status_code=400, detail="title is required")
+        if not file:
+            raise HTTPException(status_code=400, detail="file is required")
+        
+        # Validate tenant ID format
+        import uuid
+        try:
+            uuid.UUID(tenantId)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid tenantId format, must be a valid UUID")
+        
+        # Read file data
+        data = await file.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="File is empty")
+        
+        # Check file size (limit to 10MB)
+        if len(data) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
+        
+        svc = DocumentService(db)
+        name = file.filename.lower() if file.filename else ""
+        
+        # Process based on file type
+        if name.endswith('.csv') or name.endswith('.xlsx'):
+            rows = svc.extract_rows_from_file(file.filename, data)
+            if not rows:
+                raise HTTPException(status_code=400, detail="No data found in the file")
+            doc_id, chunk_count = svc.process_rows_and_store(tenantId, title, rows, knowledgeBaseId)
+        else:
+            extracted = svc.extract_text_from_file(file.filename, data)
+            if not extracted or not extracted.strip():
+                raise HTTPException(status_code=400, detail="No text content could be extracted from the file")
+            doc_id, chunk_count = svc.process_and_store(tenantId, title, extracted, knowledgeBaseId)
+        
+        return DocumentUploadResponse(documentId=doc_id, chunkCount=chunk_count, status="INDEXED")
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions with proper JSON formatting
+        raise
+    except ValueError as e:
+        # Handle UUID or other value errors
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        # Log the actual error for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error processing file upload: {str(e)}", exc_info=True)
+        
+        # Return a generic error message to the client
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process document: {str(e)}"
+        )
 
 
