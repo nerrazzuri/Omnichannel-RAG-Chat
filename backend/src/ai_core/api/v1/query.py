@@ -63,6 +63,8 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         context=payload.context,
     )
     conversation_service.add_message(conversation, sender_type="USER", content=payload.message)
+    # Load mutable conversation context (persist short-term memory like last person asked)
+    convo_ctx = dict(conversation.context or {})
 
     # Helpers for normalization and matching
     def norm_col(s: str) -> str:
@@ -81,6 +83,27 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             if len(parts2) >= 2:
                 variants.add(norm_name(f"{parts2[1]} {parts2[0]}"))
         return variants
+
+    def looks_like_person(raw: str) -> bool:
+        if not raw:
+            return False
+        s = raw.strip()
+        sl = s.lower()
+        # Exclude obvious non-person topics
+        non_person_keywords = [
+            'chapter', 'program', 'project', 'management', 'roles', 'responsibilities',
+            'governance', 'policy', 'process', 'procedure', 'guideline'
+        ]
+        if any(k in sl for k in non_person_keywords):
+            return False
+        # Disallow digits-heavy strings
+        if re.search(r"\d", s):
+            return False
+        # Accept formats: "Last, First" or "First Last [Middle]?"
+        if "," in s and len(s.split(",")) >= 2:
+            return True
+        tokens = [t for t in s.split() if t]
+        return 2 <= len(tokens) <= 4
 
     # Build tenant-specific corpus with associated columns metadata when available
     rows = (
@@ -115,6 +138,168 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
     rag_service.retriever.index(corpus)
     candidates = rag_service.retriever.retrieve(payload.message, top_k=10)
 
+    # Chapter navigation: answer "next chapter after chapter N"
+    def detect_next_chapter_request(q: str):
+        ql = q.lower()
+        m = re.search(r"next\s+chapter\s+after\s+chapter\s+(\d+)", ql)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                return None
+        return None
+
+    def extract_chapters(texts: list[str]) -> dict[int, str]:
+        found: dict[int, str] = {}
+        for t in texts:
+            for line in t.splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                m = re.match(r"^chapter\s+(\d+)\s*[\.:\-]?\s*(.*)$", s, flags=re.IGNORECASE)
+                if m:
+                    try:
+                        num = int(m.group(1))
+                        title = m.group(2).strip()
+                        if num not in found and title:
+                            found[num] = title
+                    except Exception:
+                        continue
+        return found
+
+    base_ch = detect_next_chapter_request(payload.message)
+    if base_ch is not None:
+        top_texts = [corpus[i] for i in (candidates[:8] if candidates else [])]
+        chapters = extract_chapters(top_texts if top_texts else corpus)
+        if (base_ch + 1) in chapters:
+            next_num = base_ch + 1
+            next_title = chapters[next_num]
+            # Persist simple chapter memory
+            try:
+                convo_ctx['last_chapter'] = next_num
+                convo_ctx['last_chapter_title'] = next_title
+                conversation.context = convo_ctx
+                db.add(conversation)
+                db.commit()
+                db.refresh(conversation)
+            except Exception:
+                db.rollback()
+            reply = {
+                "response": f"The next chapter is Chapter {next_num}: {next_title}.",
+                "citations": [],
+                "confidence": 0.9,
+                "requiresHuman": False,
+            }
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=reply["response"])
+            return QueryResponse(**reply)
+        else:
+            no_next = {
+                "response": "I couldn’t find the next chapter title in the uploaded content.",
+                "citations": [],
+                "confidence": 0.0,
+                "requiresHuman": True,
+            }
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_next["response"])
+            return QueryResponse(**no_next)
+
+    # Ordered-list extraction and follow-up memory (e.g., project management processes)
+    def detect_list_request(q: str):
+        ql = q.lower().strip()
+        # Patterns: "first 3 ... of <topic>", "top 3 ... in <topic>", "next 5", "subsequent 5 ... of <topic>"
+        m_first = re.search(r"\b(first|top)\s+(\d+)\b.*?(?:of|in)\s+(.+)$", ql)
+        if m_first:
+            n = int(m_first.group(2))
+            topic = m_first.group(3).strip().rstrip('?').strip()
+            return {"mode": "first", "n": n, "topic": topic}
+        m_next = re.search(r"\b(next|subsequent)\s+(\d+)\b(?:.*?(?:of|in)\s+(.+))?", ql)
+        if m_next:
+            n = int(m_next.group(2))
+            topic = m_next.group(3).strip().rstrip('?').strip() if m_next.group(3) else None
+            return {"mode": "next", "n": n, "topic": topic}
+        return None
+
+    def extract_ordered_items(texts: list[str]) -> list[str]:
+        items: list[str] = []
+        for t in texts:
+            for line in t.splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                if re.match(r"^(?:[-*•]\s+|\d+[\.)]\s+)", s):
+                    # Remove bullet/number prefix
+                    s = re.sub(r"^(?:[-*•]\s+|\d+[\.)]\s+)", "", s).strip()
+                    if s and s not in items:
+                        items.append(s)
+        return items
+
+    list_req = detect_list_request(payload.message)
+    if list_req:
+        topic = list_req.get("topic") or convo_ctx.get("last_list_topic")
+        if not topic:
+            no_topic = {
+                "response": "Which topic are you referring to? For example: ‘first 3 processes of project management’.",
+                "citations": [],
+                "confidence": 0.0,
+                "requiresHuman": False,
+            }
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_topic["response"])
+            return QueryResponse(**no_topic)
+
+        # Gather top candidate texts as source for list extraction
+        top_texts = [corpus[i] for i in (candidates[:6] if candidates else [])]
+        items = extract_ordered_items(top_texts)
+
+        # If we had a previous list and same topic, reuse items as source of truth
+        if convo_ctx.get("last_list_topic") == topic and isinstance(convo_ctx.get("last_list_items"), list):
+            prev_items = [it for it in convo_ctx.get("last_list_items") if isinstance(it, str) and it]
+            # Prefer the longer list between prev and freshly extracted
+            if len(prev_items) > len(items):
+                items = prev_items
+
+        if not items:
+            no_items = {
+                "response": f"I couldn’t find an ordered list of items for {topic}.",
+                "citations": [],
+                "confidence": 0.0,
+                "requiresHuman": True,
+            }
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_items["response"])
+            return QueryResponse(**no_items)
+
+        n = max(1, int(list_req.get("n", 1)))
+        mode = list_req.get("mode")
+        start_index = 0
+        if mode == "next":
+            # Continue from prior index if same topic
+            if convo_ctx.get("last_list_topic") == topic and isinstance(convo_ctx.get("last_list_index"), int):
+                start_index = max(0, int(convo_ctx["last_list_index"]))
+
+        end_index = min(len(items), start_index + n)
+        slice_items = items[start_index:end_index]
+
+        # Persist list memory
+        try:
+            convo_ctx["last_list_topic"] = topic
+            convo_ctx["last_list_items"] = items
+            convo_ctx["last_list_index"] = end_index
+            conversation.context = convo_ctx
+            db.add(conversation)
+            db.commit()
+            db.refresh(conversation)
+        except Exception:
+            db.rollback()
+
+        numbered = [f"{i+1}. {it}" for i, it in enumerate(slice_items, start=start_index)]
+        response_text = f"Here are the {'next' if mode=='next' else 'first'} {len(slice_items)} items for {topic}:\n" + "\n".join(numbered)
+        payload_out = {
+            "response": response_text,
+            "citations": [],
+            "confidence": 0.8,
+            "requiresHuman": False,
+        }
+        conversation_service.add_message(conversation, sender_type="SYSTEM", content=payload_out["response"])
+        return QueryResponse(**payload_out)
+
     # Schema-aware extraction for tabular rows
     def detect_requested_field(q: str):
         ql = q.lower()
@@ -138,9 +323,29 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
     requested = detect_requested_field(payload.message)
     if requested:
         person_match = re.search(r"(?:of|for)\s+([^?]+)", payload.message, flags=re.IGNORECASE)
-        person_name_raw = person_match.group(1) if person_match else payload.message
-        person_name_raw = person_name_raw.strip().strip('?')
-        person_names = name_variants(person_name_raw)
+        candidate = person_match.group(1).strip() if person_match else None
+        pronoun_ref = any(p in lower_q for p in ["his", "her", "their", "him", "them"])
+        # Determine person context: either pronoun referring to memory, or the captured phrase looks like a person
+        person_context = (pronoun_ref and 'last_person' in convo_ctx) or (candidate and looks_like_person(candidate))
+        if not person_context:
+            # Not a person-specific query; answer via generic RAG/policy and return
+            preselected_np = candidates[:6] if candidates else []
+            result_np = rag_service.answer(payload.message, preselected_contexts=preselected_np)
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=result_np["response"])
+            return QueryResponse(**result_np)
+        else:
+            person_name_raw = candidate if candidate else convo_ctx.get('last_person')
+            if not person_name_raw:
+                no_person = {
+                    "response": "Who are you asking about? Please include the person’s name (e.g., ‘What is the position of Jane Doe?’).",
+                    "citations": [],
+                    "confidence": 0.0,
+                    "requiresHuman": False,
+                }
+                conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_person["response"]) 
+                return QueryResponse(**no_person)
+            person_name_raw = person_name_raw.strip().strip('?')
+            person_names = name_variants(person_name_raw)
 
         field_aliases = {
             'salary': ['salary', 'annualsalary', 'salaryamount', 'pay', 'basepay', 'base_salary', 'compensation', 'wage', 'earning'],
@@ -204,6 +409,7 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         best_row_text = None
         best_score = -1.0
         
+        canonical_name_for_memory = None
         for row_idx, row_text, col_to_val in matching_rows:
             # Look for the requested field
             for key in field_aliases.get(requested, [requested]):
@@ -215,10 +421,14 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                         best_score = score
                         best_value = str(col_to_val[k]).strip()
                         best_row_text = row_text
+                        # Capture a canonical display name from known name columns for memory
+                        for nc in ['employee_name', 'name', 'employee', 'empname', 'full_name', 'employee_full_name']:
+                            if nc in col_to_val and str(col_to_val[nc]).strip() != '':
+                                canonical_name_for_memory = str(col_to_val[nc]).strip()
                     break
         if best_value:
             # Format the response in a human-readable way
-            person_display_name = person_name_raw
+            person_display_name = canonical_name_for_memory or person_name_raw
             
             # Format response based on the field type
             if requested == 'salary':
@@ -251,7 +461,16 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 "confidence": 0.9,
                 "requiresHuman": False,
             }
-            conversation_service.add_message(conversation, sender_type="SYSTEM", content=response_payload["response"])
+            # Persist short-term memory of last referenced person
+            try:
+                convo_ctx['last_person'] = person_display_name
+                conversation.context = convo_ctx
+                db.add(conversation)
+                db.commit()
+                db.refresh(conversation)
+            except Exception:
+                db.rollback()
+            conversation_service.add_message(conversation, sender_type="SYSTEM", content=response_payload["response"])            
             return QueryResponse(**response_payload)
         # Avoid falling back to generic RAG when a specific field was requested but not found
         field_display = requested.replace('_', ' ').title()
@@ -265,7 +484,9 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         return QueryResponse(**no_match)
 
     # Fallback to generic RAG answer if no structured match
-    result = rag_service.answer(payload.message)
+    # Use the previously retrieved candidates and limit to 6 (aligns with sample)
+    preselected = candidates[:6] if candidates else []
+    result = rag_service.answer(payload.message, preselected_contexts=preselected, tenant_id=str(tenant_uuid), db=db)
     conversation_service.add_message(conversation, sender_type="SYSTEM", content=result["response"])
     return QueryResponse(**result)
 

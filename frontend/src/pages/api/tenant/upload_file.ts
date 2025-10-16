@@ -2,7 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 export const config = {
   api: {
-    bodyParser: false,
+    bodyParser: false, // keep raw stream for multipart
+    responseLimit: false, // allow large upstream responses
   },
 };
 

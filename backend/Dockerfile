@@ -40,8 +40,8 @@ RUN mkdir -p logs && chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Set Python path
-ENV PYTHONPATH=/app
+# Set Python path to include application source
+ENV PYTHONPATH=/app/src
 ENV PATH=/home/appuser/.local/bin:$PATH
 
 # Expose port
@@ -51,5 +51,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8000/v1/health || exit 1
 
-# Start the application
-CMD ["uvicorn", "src.ai_core.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start the application (module path matches PYTHONPATH)
+CMD ["uvicorn", "ai_core.main:app", "--host", "0.0.0.0", "--port", "8000"]

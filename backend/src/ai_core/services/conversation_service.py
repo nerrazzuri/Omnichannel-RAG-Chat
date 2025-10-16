@@ -14,6 +14,16 @@ class ConversationService:
     def get_or_create_conversation(
         self, tenant_id: str, user_id: str, channel: str, context: Optional[Dict[str, Any]] = None, channel_ctx: Optional[Dict[str, Any]] = None
     ) -> Conversation:
+        # Ensure the user exists to satisfy FK constraints (PostgreSQL)
+        user = self.db.get(User, user_id)
+        if not user:
+            # Default new users to END_USER role; infer type from channel
+            inferred_type = "EXTERNAL_CUSTOMER" if channel.lower() in {"web", "whatsapp", "telegram", "teams"} else "EXTERNAL_CUSTOMER"
+            user = User(id=user_id, tenant_id=tenant_id, user_type=inferred_type)
+            self.db.add(user)
+            self.db.commit()
+            self.db.refresh(user)
+
         stmt = (
             select(Conversation)
             .where(Conversation.tenant_id == tenant_id)

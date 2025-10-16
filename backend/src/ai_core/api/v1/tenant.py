@@ -44,14 +44,12 @@ async def upload_document_file(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid tenantId format, must be a valid UUID")
         
-        # Read file data
+        # Read file data (FastAPI will stream to memory/disk depending on server config)
         data = await file.read()
         if not data:
             raise HTTPException(status_code=400, detail="File is empty")
         
-        # Check file size (limit to 10MB)
-        if len(data) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
+        # No hard file size limit enforced here; rely on infrastructure (reverse proxy/app server) limits
         
         svc = DocumentService(db)
         name = file.filename.lower() if file.filename else ""
