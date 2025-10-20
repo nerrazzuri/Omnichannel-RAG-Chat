@@ -50,6 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_STAGING }}
+      USE_GKE_GCLOUD_AUTH_PLUGIN: "True"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,6 +78,12 @@ jobs:
       - name: Setup gcloud (when using GCP auth)
         if: ${{ env.KUBE_CONFIG == '' }}
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install GKE auth plugin (when using GCP auth)
+        if: ${{ env.KUBE_CONFIG == '' }}
+        run: |
+          python3 -m pip install --user --upgrade gke-gcloud-auth-plugin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Fetch GKE kubeconfig (when using GCP auth)
         if: ${{ env.KUBE_CONFIG == '' }}
