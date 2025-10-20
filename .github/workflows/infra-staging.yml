@@ -78,12 +78,9 @@ jobs:
       - name: Setup gcloud (when using GCP auth)
         if: ${{ env.KUBE_CONFIG == '' }}
         uses: google-github-actions/setup-gcloud@v2
-
-      - name: Install GKE auth plugin (when using GCP auth)
-        if: ${{ env.KUBE_CONFIG == '' }}
-        run: |
-          python3 -m pip install --user --upgrade gke-gcloud-auth-plugin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+        with:
+          install_components: true
+          components: gke-gcloud-auth-plugin
 
       - name: Fetch GKE kubeconfig (when using GCP auth)
         if: ${{ env.KUBE_CONFIG == '' }}
