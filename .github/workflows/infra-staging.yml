@@ -95,6 +95,10 @@ jobs:
           gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region "$GKE_REGION" --project "$GCP_PROJECT_ID"
           kubectl cluster-info
 
+      - name: Ensure namespace exists (omni-staging)
+        run: |
+          kubectl create namespace omni-staging --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Apply manifests (staging)
         run: |
           kubectl apply -f infra/k8s/staging/
