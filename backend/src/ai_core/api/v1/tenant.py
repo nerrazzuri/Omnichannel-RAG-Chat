@@ -65,33 +65,13 @@ async def upload_document_file(
         
         # Process based on file type
         if name.endswith('.csv') or name.endswith('.xlsx'):
-            if name.endswith('.xlsx'):
-                # Ingest all sheets: create a document per sheet
-                sheets = svc.extract_rows_by_sheet(file.filename, data)
-                total_chunks = 0
-                first_doc_id = None
-                for sheet_name, rows in sheets.items():
-                    if not rows:
-                        continue
-                    sid, cnt = svc.process_rows_and_store(
-                        tenantId,
-                        f"{title} - {sheet_name}",
-                        rows,
-                        knowledgeBaseId,
-                        progress_job_id=jobId,
-                        sheet_name=sheet_name,
-                    )
-                    total_chunks += cnt
-                    if first_doc_id is None:
-                        first_doc_id = sid
-                if first_doc_id is None:
-                    raise HTTPException(status_code=400, detail="No data found in the workbook")
-                doc_id, chunk_count = first_doc_id, total_chunks
-            else:
-                rows = svc.extract_rows_from_file(file.filename, data)
-                if not rows:
-                    raise HTTPException(status_code=400, detail="No data found in the file")
-                doc_id, chunk_count = svc.process_rows_and_store(tenantId, title, rows, knowledgeBaseId, progress_job_id=jobId)
+            # New pandas-based ingestion for tabular files
+            try:
+                doc_id, chunk_count = svc.process_pandas_and_store(
+                    tenantId, title, file.filename, data, knowledgeBaseId, progress_job_id=jobId
+                )
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Tabular ingestion failed: {e}")
         else:
             extracted = svc.extract_text_from_file(file.filename, data)
             if not extracted or not extracted.strip():

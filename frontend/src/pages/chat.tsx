@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { streamQuery } from '../services/chatService';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 
@@ -55,18 +57,47 @@ export default function ChatPage() {
     }
   };
 
-  const MessageBubble = ({ m }: { m: Message }) => (
-    <div className={`w-full flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex items-start gap-3 max-w-[900px] w-full ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
-        <div className={`h-8 w-8 rounded-full flex items-center justify-center ${m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
-          {m.role === 'user' ? 'U' : 'AI'}
-        </div>
-        <div className={`${m.role === 'user' ? 'bg-blue-600 text-white' : 'bg-white text-gray-900 border border-gray-200'} px-4 py-3 rounded-2xl shadow-sm`}> 
-          <div className="whitespace-pre-wrap leading-relaxed text-sm">{m.content}</div>
+  const MessageBubble = ({ m }: { m: Message }) => {
+    const isUser = m.role === 'user';
+    const urls = !isUser ? Array.from(new Set((m.content.match(/https?:\/\/[\w\-\.\/?#=&%]+/g) || []))).slice(0, 5) : [];
+    const copy = async () => {
+      try { await navigator.clipboard.writeText(m.content); } catch {}
+    };
+    return (
+      <div className={`w-full flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+        <div className={`flex items-start gap-3 max-w-[900px] w-full ${isUser ? 'flex-row-reverse' : ''}`}>
+          <div className={`h-8 w-8 rounded-full flex items-center justify-center ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
+            {isUser ? 'U' : 'AI'}
+          </div>
+          <div className={`${isUser ? 'bg-blue-600 text-white' : 'bg-white text-gray-900 border border-gray-200'} px-4 py-3 rounded-2xl shadow-sm w-full`}> 
+            {isUser ? (
+              <div className="whitespace-pre-wrap leading-relaxed text-sm">{m.content}</div>
+            ) : (
+              <div className="prose prose-sm max-w-none">
+                <ReactMarkdown remarkPlugins={[remarkGfm as any]}>{m.content}</ReactMarkdown>
+              </div>
+            )}
+            {!isUser && urls.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {urls.map((u, idx) => (
+                  <a key={idx} href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14L21 3m-7 0h7v7"/></svg>
+                    <span className="truncate max-w-[160px]">{u.replace(/^https?:\/\//,'')}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+            <div className="mt-2 flex justify-end">
+              <button onClick={copy} className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${isUser ? 'border-white/40 text-white/90 hover:bg-white/10' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                Copy
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">

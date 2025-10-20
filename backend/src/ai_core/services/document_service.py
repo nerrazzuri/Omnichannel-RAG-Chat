@@ -20,6 +20,8 @@ except Exception:
     tiktoken = None  # fallback
 import logging
 import re
+import pandas as pd
+import numpy as np
 
 
 def chunk_text(text: str, chunk_size: int = 700, overlap: int = 100) -> List[str]:
@@ -476,6 +478,261 @@ class DocumentService:
             # If there's an error, rollback the transaction
             self.db.rollback()
             raise
+
+    # ----------------------------
+    # New modular pandas-based ingestion helpers
+    # ----------------------------
+    @staticmethod
+    def load_file_to_dataframes(filename: str, data: bytes) -> Dict[str, pd.DataFrame]:
+        """Detect file type, load into one or more pandas DataFrames.
+        Returns a mapping of sheet_name -> DataFrame (for CSV, a single entry).
+        Tries multiple header depths for hierarchical headers.
+        """
+        name = filename.lower()
+        dfs: Dict[str, pd.DataFrame] = {}
+        try:
+            if name.endswith('.csv'):
+                # Try common encodings and header depths
+                text_variants = []
+                for enc in ['utf-8-sig', 'utf-8', 'latin-1']:
+                    try:
+                        text_variants.append(data.decode(enc))
+                        break
+                    except Exception:
+                        continue
+                raw = text_variants[0] if text_variants else data.decode('utf-8', errors='ignore')
+                for header_depth in [None, [0], [0,1], [0,1,2]]:
+                    try:
+                        df = pd.read_csv(pd.io.common.StringIO(raw), header=header_depth) if header_depth is not None else pd.read_csv(pd.io.common.StringIO(raw))
+                        if df is not None and df.shape[0] > 0:
+                            dfs['Sheet1'] = df
+                            break
+                    except Exception:
+                        continue
+                if not dfs:
+                    # final fallback
+                    dfs['Sheet1'] = pd.read_csv(pd.io.common.StringIO(raw), header=0)
+            elif name.endswith('.xlsx'):
+                buf = io.BytesIO(data)
+                # Try multiple header depths per sheet
+                xls = pd.ExcelFile(buf, engine='openpyxl')
+                for sheet in xls.sheet_names:
+                    df: pd.DataFrame | None = None
+                    for header_depth in [[0,1,2], [0,1], [0]]:
+                        try:
+                            df_try = pd.read_excel(xls, sheet_name=sheet, header=header_depth)
+                            if df_try is not None and df_try.shape[0] > 0:
+                                df = df_try
+                                break
+                        except Exception:
+                            continue
+                    if df is None:
+                        df = pd.read_excel(xls, sheet_name=sheet)
+                    dfs[sheet] = df
+            else:
+                raise ValueError("Unsupported tabular file type; expected .csv or .xlsx")
+            # Log basic info
+            logging.getLogger(__name__).info(f"Loaded file '{filename}' into {len(dfs)} DataFrame(s): {list(dfs.keys())}")
+            return dfs
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to load '{filename}' into pandas: {e}")
+            raise
+
+    @staticmethod
+    def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
+        """Flatten multi-level headers and strip empty parts."""
+        try:
+            if isinstance(df.columns, pd.MultiIndex):
+                df = df.copy()
+                df.columns = [
+                    ' | '.join([str(c) for c in col if str(c) != 'nan']).strip()
+                    for col in df.columns.values
+                ]
+            else:
+                df = df.copy()
+                df.columns = [str(c).strip() for c in df.columns]
+        except Exception:
+            # Best-effort normalization
+            df = df.copy()
+            df.columns = [str(c) for c in df.columns]
+        return df
+
+    @staticmethod
+    def _is_mostly_numeric_or_nan(series: pd.Series) -> bool:
+        try:
+            s = pd.to_numeric(series, errors='coerce')
+            frac_num_or_nan = float(s.notna().sum()) / max(1, len(s))
+            # Consider numeric if original non-nulls mostly converted to numeric
+            return frac_num_or_nan >= 0.9
+        except Exception:
+            return False
+
+    @staticmethod
+    def _should_summarize(df: pd.DataFrame) -> bool:
+        try:
+            non_obj_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            frac_numeric = float(len(non_obj_cols)) / max(1, len(df.columns))
+            return (frac_numeric >= 0.7) and (len(df.columns) < 10)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _summarize_numeric_df(df: pd.DataFrame, title: str) -> str:
+        try:
+            desc = df.describe(include=[np.number]).to_dict()
+            lines = [f"Summary for {title}:"]
+            for col, stats in desc.items():
+                if not isinstance(stats, dict):
+                    continue
+                mn = stats.get('min'); mx = stats.get('max'); mean = stats.get('mean')
+                lines.append(f"- {col}: min={mn}, max={mx}, mean={round(mean, 3) if mean is not None else mean}")
+            # Simple outlier detection: z-score > 3 (approx.)
+            try:
+                z = (df[ [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])] ] - df.mean(numeric_only=True)) / df.std(numeric_only=True)
+                outlier_counts = (np.abs(z) > 3).sum().to_dict()
+                for col, cnt in outlier_counts.items():
+                    if int(cnt) > 0:
+                        lines.append(f"- Outliers detected in {col}: {int(cnt)} rows")
+            except Exception:
+                pass
+            return "\n".join(lines)
+        except Exception:
+            return f"Summary for {title}: numeric overview unavailable."
+
+    @classmethod
+    def df_to_semantic_docs(cls, df: pd.DataFrame, filename: str, sheet_name: str | None = None) -> List[Tuple[str, Dict[str, Any]]]:
+        """Convert a DataFrame into row-wise semantic mini-documents.
+        If the DataFrame is predominantly numeric with few columns, return a single summary doc.
+        Returns list of (text, metadata) where metadata includes source_file and row_index.
+        """
+        docs: List[Tuple[str, Dict[str, Any]]] = []
+        if df is None or df.shape[0] == 0:
+            return docs
+        df = cls.normalize_headers(df)
+        # Decide to summarize vs row-wise
+        if cls._should_summarize(df):
+            text = cls._summarize_numeric_df(df, title=sheet_name or filename)
+            meta = {"source_file": filename, "sheet": sheet_name, "summary": True}
+            return [(text, meta)]
+        # Identify fields to ignore (mostly numeric/NaN)
+        ignore_cols = set()
+        for c in df.columns:
+            try:
+                if cls._is_mostly_numeric_or_nan(df[c]):
+                    ignore_cols.add(c)
+            except Exception:
+                continue
+        # Build per-row docs
+        for idx, row in df.iterrows():
+            parts: List[str] = [f"Record {idx}:"]
+            for c in df.columns:
+                if c in ignore_cols:
+                    continue
+                val = row.get(c)
+                if pd.isna(val) or (isinstance(val, str) and not val.strip()):
+                    continue
+                parts.append(f"{c}: {val}")
+            text = "\n".join(parts)
+            if text.strip() and len(parts) > 1:
+                meta = {"source_file": filename, "row_index": int(idx)}
+                if sheet_name:
+                    meta["sheet"] = sheet_name
+                docs.append((text, meta))
+        return docs
+
+    def process_pandas_and_store(self, tenant_id: str, title: str, filename: str, data: bytes, knowledge_base_id: str, progress_job_id: str | None = None) -> Tuple[str, int]:
+        """End-to-end: load file to DataFrame(s), convert to semantic docs, embed and store one chunk per doc.
+        Returns (document_id_of_first, total_chunks).
+        """
+        # Load multiple DataFrames (sheets)
+        dfs = self.load_file_to_dataframes(filename, data)
+        logger = logging.getLogger(__name__)
+        logger.info(f"Ingesting '{filename}': sheets={list(dfs.keys())}")
+        # Create/ensure KB
+        kb_id = self._get_or_create_knowledge_base(tenant_id, knowledge_base_id)
+        total_chunks = 0
+        first_doc_id: str | None = None
+        for sheet, df in dfs.items():
+            # Convert to semantic documents
+            docs = self.df_to_semantic_docs(df, filename=filename, sheet_name=sheet)
+            if not docs:
+                logger.info(f"No documents generated for sheet '{sheet}'")
+                continue
+            # Create parent Document row with a preview
+            preview = "\n\n".join([d[0] for d in docs[:2]])
+            parent = Document(title=f"{title} - {sheet}", content=preview, knowledge_base_id=kb_id, status="PROCESSING")
+            # Optionally store flattened columns on meta
+            try:
+                parent.meta = {"columns": list(df.columns)}
+            except Exception:
+                pass
+            self.db.add(parent)
+            self.db.commit(); self.db.refresh(parent)
+            # Progress update
+            if progress_job_id:
+                try:
+                    from shared.cache.redis import redis_cache
+                    redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "embedding", "progress": 40}, ttl=3600)
+                except Exception:
+                    pass
+            # Embed docs (use local for robustness by default for tabular)
+            texts = [t for (t, _m) in docs]
+            metas = [m for (_t, m) in docs]
+            embeddings = self.embed(texts, force_local=True)
+            # Store rows as KnowledgeChunks
+            qdrant_payload: List[Dict[str, Any]] = []
+            for idx, (t, m, emb) in enumerate(zip(texts, metas, embeddings)):
+                import uuid as _uuid
+                chunk_id = _uuid.uuid4()
+                kc = KnowledgeChunk(id=chunk_id, document_id=parent.id, content=t, chunk_index=idx, embedding=emb, meta=m)
+                self.db.add(kc)
+                total_chunks += 1
+                # Prepare optional vector payload
+                try:
+                    qdrant_payload.append({
+                        "id": str(chunk_id),
+                        "embedding": emb,
+                        "document_id": str(parent.id),
+                        "document_title": parent.title,
+                        "content": t,
+                        "chunk_index": idx,
+                        "chapter_num": None,
+                        "chapter_title": None,
+                        "page": None,
+                    })
+                except Exception:
+                    pass
+            parent.status = "INDEXED"; parent.chunk_count = len(texts)
+            self.db.add(parent); self.db.commit()
+            if first_doc_id is None:
+                first_doc_id = str(parent.id)
+            # Log sample preview
+            logger.info(f"Parsed rows for '{sheet}': {len(texts)}; sample=\n{texts[0][:400]}" )
+            # Best-effort upsert to Qdrant if dims match
+            try:
+                if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
+                    dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
+                    if dim == 1536:
+                        try:
+                            qdrant_service.create_collection()
+                        except Exception:
+                            pass
+                        try:
+                            qdrant_service.upsert_knowledge_chunks(tenant_id, qdrant_payload)
+                        except Exception as e:
+                            logger.warning(f"Qdrant upsert skipped: {e}")
+            except Exception:
+                pass
+        if not first_doc_id:
+            raise ValueError("No data parsed from file")
+        # Final progress
+        if progress_job_id:
+            try:
+                from shared.cache.redis import redis_cache
+                redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "done", "progress": 100}, ttl=3600)
+            except Exception:
+                pass
+        return first_doc_id, total_chunks
 
     def _get_or_create_knowledge_base(self, tenant_id: str, provided_kb_id: str) -> str:
         import uuid

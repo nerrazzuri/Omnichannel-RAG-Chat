@@ -295,6 +295,7 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
 
     # Schema-aware extraction for tabular rows
     def detect_requested_field(q: str):
+        """Coarse intent detector for well-known fields; used only as a hint."""
         ql = q.lower()
         mapping = {
             'salary': ['salary', 'annualsalary', 'salaryamount', 'pay', 'compensation', 'wage', 'earning'],
@@ -303,11 +304,58 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             'employmentstatus': ['employmentstatus', 'status', 'employment status', 'work status'],
             'position': ['position', 'title', 'job title', 'role', 'designation'],
             'location': ['location', 'office', 'site', 'workplace', 'based in'],
+            'recruitment_source': ['recruitment source', 'hiring source', 'recruitmentsource', 'recruit source', 'recruiting source', 'sourcing channel'],
+            'last_performance_review_date': ['last performance review date', 'last review date', 'performance review date', 'last appraisal date', 'last evaluation date'],
         }
         for key, terms in mapping.items():
             if any(t in ql for t in terms):
                 return key
         return None
+
+    def resolve_field_column(q: str, available_cols: list[str]) -> tuple[str | None, float]:
+        """Resolve a free-form field phrase to a column name among available_cols.
+        Returns (column_name, confidence).
+        """
+        import difflib
+        qn = norm_col(q)
+        cols = [norm_col(c) for c in (available_cols or [])]
+        # Exact match
+        if qn in cols:
+            return qn, 1.0
+        # Synonyms map to canonical columns; choose the first present in cols
+        synonyms = {
+            'salary': ['salary', 'annualsalary', 'salaryamount', 'base_salary', 'basepay', 'pay', 'compensation', 'wage'],
+            'department': ['department', 'dept', 'division', 'team', 'unit'],
+            'manager': ['manager', 'managername', 'reporting_manager', 'supervisor', 'boss'],
+            'employmentstatus': ['employment_status', 'employmentstatus', 'work_status', 'status'],
+            'position': ['position', 'title', 'job_title', 'designation', 'jobtitle'],
+            'location': ['location', 'office', 'site', 'workplace', 'city', 'state'],
+            'recruitment_source': ['recruitment_source', 'recruitmentsource', 'hiring_source', 'recruit_source', 'recruiting_source', 'sourcing_channel'],
+            'last_performance_review_date': ['last_performance_review_date', 'performance_review_date', 'last_review_date', 'last_appraisal_date', 'last_evaluation_date'],
+        }
+        for canon, syns in synonyms.items():
+            if any(s in qn for s in syns):
+                for s in syns:
+                    if s in cols:
+                        return s, 0.9
+        # Token containment heuristic
+        qtokens = [t for t in qn.split('_') if t]
+        best = None
+        best_score = 0.0
+        for c in cols:
+            ctokens = [t for t in c.split('_') if t]
+            common = len(set(qtokens) & set(ctokens))
+            score = common / max(1, len(set(qtokens)))
+            if score > best_score:
+                best_score = score
+                best = c
+        if best and best_score >= 0.5:
+            return best, best_score
+        # Fuzzy similarity as last resort
+        matches = difflib.get_close_matches(qn, cols, n=1, cutoff=0.6)
+        if matches:
+            return matches[0], 0.6
+        return None, 0.0
 
     def parse_csv_row(row_text: str):
         reader = csv.reader(io.StringIO(row_text))
@@ -339,15 +387,6 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 return QueryResponse(**no_person)
             person_name_raw = person_name_raw.strip().strip('?')
             person_names = name_variants(person_name_raw)
-
-        field_aliases = {
-            'salary': ['salary', 'annualsalary', 'salaryamount', 'pay', 'basepay', 'base_salary', 'compensation', 'wage', 'earning'],
-            'department': ['department', 'dept', 'division', 'team', 'unit'],
-            'manager': ['manager', 'managername', 'supervisor', 'boss', 'reporting_manager'],
-            'employmentstatus': ['employmentstatus', 'status', 'employment_status', 'work_status'],
-            'position': ['position', 'title', 'job_title', 'role', 'designation', 'jobtitle'],
-            'location': ['location', 'office', 'site', 'workplace', 'state', 'city'],
-        }
 
         # First pass: find exact name matches
         matching_rows = []
@@ -397,24 +436,29 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_match["response"])
             return QueryResponse(**no_match)
         
-        # Second pass: extract the requested field from matching rows
+        # Second pass: resolve the requested field/column and extract value from matching rows
         best_value = None
         best_row_text = None
         best_score = -1.0
         
         canonical_name_for_memory = None
         for row_idx, row_text, col_to_val in matching_rows:
-            # Look for the requested field
-            for key in field_aliases.get(requested, [requested]):
-                k = norm_col(key)
+            # Resolve field column dynamically using available columns in this row
+            resolved_col, confidence = resolve_field_column(payload.message if not requested else requested.replace('_',' '), list(col_to_val.keys()))
+            candidate_cols = []
+            if resolved_col:
+                candidate_cols.append(resolved_col)
+            # Also consider the coarse intent (requested) as fallback
+            if requested:
+                candidate_cols.append(norm_col(requested))
+            # Try candidates in order
+            for k in candidate_cols:
                 if k in col_to_val and str(col_to_val[k]).strip() != '':
-                    # Use a simple scoring based on field presence (1.0 for exact match)
-                    score = 1.0
+                    score = 1.0 if k == resolved_col else 0.8
                     if score > best_score:
                         best_score = score
                         best_value = str(col_to_val[k]).strip()
                         best_row_text = row_text
-                        # Capture a canonical display name from known name columns for memory
                         for nc in ['employee_name', 'name', 'employee', 'empname', 'full_name', 'employee_full_name']:
                             if nc in col_to_val and str(col_to_val[nc]).strip() != '':
                                 canonical_name_for_memory = str(col_to_val[nc]).strip()
@@ -443,6 +487,8 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 response_text = f"{person_display_name} works as a {best_value}."
             elif requested == 'location':
                 response_text = f"{person_display_name} is located in {best_value}."
+            elif requested == 'recruitment_source':
+                response_text = f"The recruitment source of {person_display_name} is {best_value}."
             else:
                 # Generic format for other fields
                 field_display = requested.replace('_', ' ').title()
