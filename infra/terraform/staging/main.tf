@@ -1,14 +1,23 @@
 resource "kubernetes_namespace" "ns" {
-  metadata { name = var.namespace }
+  metadata {
+    name = var.namespace
+  }
 }
 
 resource "kubernetes_deployment" "ai_core" {
-  metadata { name = "ai-core" namespace = var.namespace }
+  metadata {
+    name      = "ai-core"
+    namespace = var.namespace
+  }
   spec {
     replicas = 1
-    selector { match_labels = { app = "ai-core" } }
+    selector {
+      match_labels = { app = "ai-core" }
+    }
     template {
-      metadata { labels = { app = "ai-core" } }
+      metadata {
+        labels = { app = "ai-core" }
+      }
       spec {
         container {
           name  = "ai-core"
@@ -32,7 +41,10 @@ resource "kubernetes_deployment" "ai_core" {
 }
 
 resource "kubernetes_service" "ai_core" {
-  metadata { name = "ai-core" namespace = var.namespace }
+  metadata {
+    name      = "ai-core"
+    namespace = var.namespace
+  }
   spec {
     selector = { app = "ai-core" }
     port { port = 8000 target_port = 8000 }
@@ -40,12 +52,19 @@ resource "kubernetes_service" "ai_core" {
 }
 
 resource "kubernetes_deployment" "frontend" {
-  metadata { name = "frontend" namespace = var.namespace }
+  metadata {
+    name      = "frontend"
+    namespace = var.namespace
+  }
   spec {
     replicas = 1
-    selector { match_labels = { app = "frontend" } }
+    selector {
+      match_labels = { app = "frontend" }
+    }
     template {
-      metadata { labels = { app = "frontend" } }
+      metadata {
+        labels = { app = "frontend" }
+      }
       spec {
         container {
           name  = "frontend"
@@ -67,7 +86,10 @@ resource "kubernetes_deployment" "frontend" {
 }
 
 resource "kubernetes_service" "frontend" {
-  metadata { name = "frontend" namespace = var.namespace }
+  metadata {
+    name      = "frontend"
+    namespace = var.namespace
+  }
   spec {
     type = "NodePort"
     selector = { app = "frontend" }
