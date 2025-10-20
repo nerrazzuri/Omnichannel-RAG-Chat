@@ -93,6 +93,7 @@ class QdrantService:
                     payload={
                         "tenant_id": tenant_id,
                         "document_id": chunk["document_id"],
+                        "document_title": chunk.get("document_title"),
                         "content": chunk["content"],
                         "chunk_index": chunk["chunk_index"],
                         # include structured fields if present
@@ -199,6 +200,40 @@ class QdrantService:
         except Exception as e:
             logger.error(f"Failed to get collection info: {e}")
             return {"status": "error", "error": str(e)}
+
+    def get_adjacent_chunks(self, tenant_id: str, document_id: str, start_index: int, window: int = 2) -> List[Dict[str, Any]]:
+        """Fetch neighbor chunks around a given chunk index for stitching.
+
+        Note: Qdrant doesn't support range by chunk_index directly; we scroll and filter in client for simplicity.
+        """
+        try:
+            res = self._with_retries(
+                self.client.scroll,
+                collection_name=self.collection_name,
+                scroll_filter=Filter(must=[
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                    FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+                ]),
+                with_payload=True,
+                with_vectors=False,
+                limit=512,
+            )
+            points = res[0] if res and res[0] else []
+            neighbors: List[Dict[str, Any]] = []
+            for p in points:
+                pl = p.payload or {}
+                try:
+                    idx = int(pl.get("chunk_index", -999999))
+                except Exception:
+                    continue
+                if abs(idx - start_index) <= window and idx != start_index:
+                    neighbors.append(pl)
+            # Sort by chunk_index
+            neighbors.sort(key=lambda x: int(x.get("chunk_index", 0)))
+            return neighbors
+        except Exception as e:
+            logger.warning(f"get_adjacent_chunks failed: {e}")
+            return []
 
     def list_chapters(self, tenant_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
         """Return points that have chapter_num or chapter_title for a tenant.

@@ -124,19 +124,12 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             cols = [norm_col(str(c)) for c in meta['columns']]
         corpus_columns.append(cols)
 
-    if not corpus:
-        no_knowledge = {
-            "response": "No tenant knowledge available yet to answer this question. Please upload documents or escalate to a human agent.",
-            "citations": [],
-            "confidence": 0.0,
-            "requiresHuman": True,
-        }
-        conversation_service.add_message(conversation, sender_type="SYSTEM", content=no_knowledge["response"])
-        return QueryResponse(**no_knowledge)
-
-    # Index and retrieve candidates
-    rag_service.retriever.index(corpus)
-    candidates = rag_service.retriever.retrieve(payload.message, top_k=10)
+    # Index and retrieve candidates if we have corpus; otherwise allow backend public fallback
+    if corpus:
+        rag_service.retriever.index(corpus)
+        candidates = rag_service.retriever.retrieve(payload.message, top_k=10)
+    else:
+        candidates = []
 
     # Chapter navigation: answer "next chapter after chapter N"
     def detect_next_chapter_request(q: str):

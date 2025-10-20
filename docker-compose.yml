@@ -96,6 +96,7 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:3001/api
       - NEXT_PUBLIC_AI_CORE_URL=http://localhost:8000
+      - AI_CORE_URL=http://ai-core:8000
     depends_on:
       gateway:
         condition: service_healthy

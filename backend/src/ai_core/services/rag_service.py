@@ -4,16 +4,22 @@ augmented with OpenAI chat generation using a strict prompt to avoid
 hallucinations.
 """
 from typing import List, Dict, Any, Optional
+import difflib
+from datetime import datetime
 from collections import defaultdict
 import math
 import re
 import os
 import json
+import urllib.parse
+import urllib.request
 from sqlalchemy.orm import Session
 from shared.database.models import KnowledgeChunk, Document, KnowledgeBase
 from shared.cache.redis import redis_cache
 from openai import OpenAI
 from shared.vector.qdrant import qdrant_service
+from shared.config.tuning import retrieval
+from shared.database.models import Document as DbDocument, KnowledgeChunk as DbChunk, KnowledgeBase as DbKB
 
 # Placeholder lightweight BM25 implementation using term frequency
 class BM25Lite:
@@ -160,7 +166,7 @@ class RAGService:
         self.chat_temperature = float(os.getenv("RAG_CHAT_TEMPERATURE", "0.3"))
         # Strict prompt to keep answers grounded
         self.prompt_template = (
-            "You are a professional corporate assistant with access to internal company documents.\n\n"
+            "You are a professional corporate assistant with access to internal company documents. Your name is Omni.\n\n"
             "Use the information from the CONTEXT below to answer the QUESTION as accurately and helpfully as possible.\n"
             "If the context truly lacks the relevant information, reply exactly with: \n"
             "\"I don’t have that information in the current database.\"\n\n"
@@ -180,14 +186,18 @@ class RAGService:
             "field": None,
             "list": None,
             "chapter": None,
+            "aggregation": None,
         }
         if not self.openai_client:
             return default_plan
         try:
             planner_prompt = (
                 "You are a retrieval planner. Analyze the USER question and output a strict JSON object with fields: "
-                "task_type (one of: generic, tabular_field, policy_summary, list_request, chapter_nav), "
-                "entity (string or null), field (string or null), list (object with mode and n or null), chapter (object with base or null). "
+                "task_type (one of: generic, tabular_field, tabular_aggregate, policy_summary, list_request, chapter_nav), "
+                "entity (string or null), field (string or null), list (object with mode and n or null), chapter (object with base or null), "
+                "aggregation (object or null). aggregation supports: op (sum|avg|count|min|max|distinct_count), field (string), sheet (string or null), "
+                "filters (array of {column,value,op}), where op in [eq,ne,gt,gte,lt,lte,contains], group_by (array of strings or null), "
+                "date_field (string or null), time_range (object or null with forms: {type:'year',value:'2014'} | {type:'between',start:'2014-01-01',end:'2014-12-31'} | {type:'quarter',value:'Q1 2014'}). "
                 "Respond with JSON ONLY."
             )
             msg = [
@@ -277,6 +287,281 @@ class RAGService:
             pass
         return contexts[:top_k]
 
+    # Generic SQL aggregation over structured rows stored in KnowledgeChunk.meta.row
+    def _aggregate_over_rows(
+        self,
+        db: Session,
+        tenant_id: str,
+        op: str,
+        field: str,
+        sheet: Optional[str] = None,
+        filters: Optional[List[Dict[str, Any]]] = None,
+        group_by: Optional[List[str]] = None,
+        date_field: Optional[str] = None,
+        time_range: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        def _norm(s: str) -> str:
+            return s.strip().lower().replace(' ', '_')
+
+        target = _norm(field)
+        # Simple synonym map; can be extended
+        synonyms: Dict[str, List[str]] = {
+            'sales_amount': ['salesamount', 'sales_amount', 'amount', 'revenue', 'sales'],
+        }
+
+        # Gather candidate rows for this tenant (optionally filter by sheet via document title)
+        q = (
+            db.query(KnowledgeChunk, Document)
+            .join(Document, KnowledgeChunk.document_id == Document.id)
+            .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+            .filter(KnowledgeBase.tenant_id == tenant_id)
+        )
+        if isinstance(sheet, str) and sheet.strip():
+            q = q.filter(Document.title.ilike(f"%{sheet.strip()}%"))
+        pairs = q.all()
+        if not pairs:
+            return None
+
+        # Discover available columns to resolve target field and collect samples for type inference
+        available_cols: set[str] = set()
+        col_samples: Dict[str, List[str]] = {}
+        for kc, _doc in pairs:
+            meta = kc.meta or {}
+            row_map = meta.get('row') if isinstance(meta, dict) else None
+            if isinstance(row_map, dict):
+                for k in row_map.keys():
+                    nk = _norm(str(k))
+                    available_cols.add(nk)
+                    v = row_map.get(k)
+                    if isinstance(v, str):
+                        col_samples.setdefault(nk, []).append(v)
+                        if len(col_samples[nk]) > 50:
+                            col_samples[nk] = col_samples[nk][:50]
+
+        def _looks_date(val: str) -> bool:
+            s = str(val).strip()
+            if not s:
+                return False
+            # ISO-like date prefix check YYYY-MM-DD
+            if len(s) >= 10 and s[0:4].isdigit() and s[4] in {'-','/'} and s[5:7].isdigit() and s[7] in {'-','/'} and s[8:10].isdigit():
+                return True
+            # Year-only
+            if len(s) == 4 and s.isdigit():
+                return True
+            return False
+
+        def _clean_numeric(val: str) -> Optional[float]:
+            try:
+                s = str(val).strip()
+                if not s:
+                    return None
+                neg = False
+                if s.startswith('(') and s.endswith(')'):
+                    neg = True
+                    s = s[1:-1]
+                s = s.replace('%','')
+                for ch in ['$', '€', '£', '¥', 'RM']:
+                    s = s.replace(ch, '')
+                s = s.replace(',', '').replace(' ', '')
+                if s in {'', '.', '-', '+', 'NaN', 'nan'}:
+                    return None
+                num = float(s)
+                return -num if neg else num
+            except Exception:
+                return None
+
+        # Infer column types
+        col_types: Dict[str, str] = {}
+        for col, samples in col_samples.items():
+            n_numeric = 0
+            n_date = 0
+            n_total = 0
+            for v in samples[:30]:
+                n_total += 1
+                if _clean_numeric(v) is not None:
+                    n_numeric += 1
+                if _looks_date(v):
+                    n_date += 1
+            if n_total == 0:
+                continue
+            if n_numeric / n_total >= 0.6:
+                col_types[col] = 'numeric'
+            elif n_date / n_total >= 0.6:
+                col_types[col] = 'date'
+            else:
+                col_types[col] = 'text'
+
+        resolved = None
+        if target in available_cols:
+            resolved = target
+        else:
+            for _base, syns in synonyms.items():
+                if target == _base or target in syns:
+                    for s in syns:
+                        if s in available_cols:
+                            resolved = s
+                            break
+                if resolved:
+                    break
+        if not resolved:
+            for c in available_cols:
+                if target and target in c:
+                    resolved = c
+                    break
+        if not resolved and target:
+            # Fuzzy match using difflib
+            candidates = difflib.get_close_matches(target, list(available_cols), n=1, cutoff=0.7)
+            if candidates:
+                resolved = candidates[0]
+        if not resolved:
+            return None
+
+        flist = filters or []
+        gby = [ _norm(g) for g in (group_by or []) if isinstance(g, str) and g.strip() ]
+        resolved_date = _norm(date_field) if isinstance(date_field, str) and date_field.strip() else None
+        if time_range and not resolved_date:
+            # infer a likely date column
+            date_like = [c for c,t in col_types.items() if t == 'date']
+            prefer = [c for c in date_like if 'date' in c or 'order' in c or 'time' in c or 'year' in c]
+            if prefer:
+                resolved_date = prefer[0]
+            elif date_like:
+                resolved_date = date_like[0]
+
+        def _in_timerange(cell: str) -> bool:
+            if not time_range or not resolved_date:
+                return True
+            try:
+                # Try to parse date (YYYY-MM-DD or YYYY/MM/DD). Fallback to prefix year compare
+                cell_s = str(cell).strip()
+                if time_range.get('type') == 'year':
+                    y = str(time_range.get('value') or '')
+                    return cell_s.startswith(y)
+                if time_range.get('type') == 'between':
+                    start = str(time_range.get('start') or '')
+                    end = str(time_range.get('end') or '')
+                    return (start <= cell_s <= end)
+                if time_range.get('type') == 'quarter':
+                    # crude quarter check by month; expects like 'Q1 2014'
+                    v = str(time_range.get('value') or '')
+                    m = v.upper().split()
+                    if len(m) == 2 and m[0] in {'Q1','Q2','Q3','Q4'}:
+                        year = m[1]
+                        if not cell_s.startswith(year):
+                            return False
+                        month = int(cell_s[5:7]) if len(cell_s) >= 7 and cell_s[5:7].isdigit() else None
+                        if month is None:
+                            return False
+                        if m[0] == 'Q1':
+                            return 1 <= month <= 3
+                        if m[0] == 'Q2':
+                            return 4 <= month <= 6
+                        if m[0] == 'Q3':
+                            return 7 <= month <= 9
+                        if m[0] == 'Q4':
+                            return 10 <= month <= 12
+                return True
+            except Exception:
+                return True
+
+        # Aggregation state
+        grouped_nums: Dict[tuple, List[float]] = {}
+        values: List[float] = []
+        grouped_distinct: Dict[tuple, set] = {}
+        distinct_all: set = set()
+        for kc, _doc in pairs:
+            meta = kc.meta or {}
+            row_map = meta.get('row') if isinstance(meta, dict) else None
+            if not isinstance(row_map, dict):
+                continue
+            ok = True
+            for f in flist:
+                try:
+                    col = _norm(str(f.get('column')))
+                    val = str(f.get('value') or '')
+                    opx = str(f.get('op') or 'eq').lower()
+                    if not col or val is None:
+                        continue
+                    cell = str(row_map.get(col, ''))
+                    if opx in {'eq','='} and cell.lower() != val.lower(): ok = False; break
+                    if opx in {'ne','!='} and cell.lower() == val.lower(): ok = False; break
+                    if opx in {'contains'} and val.lower() not in cell.lower(): ok = False; break
+                    if opx in {'gt','gte','lt','lte'}:
+                        try:
+                            cnum = float(cell.replace(',','').replace('$','').strip())
+                            vnum = float(val.replace(',','').replace('$','').strip())
+                            if opx == 'gt' and not (cnum > vnum): ok = False; break
+                            if opx == 'gte' and not (cnum >= vnum): ok = False; break
+                            if opx == 'lt' and not (cnum < vnum): ok = False; break
+                            if opx == 'lte' and not (cnum <= vnum): ok = False; break
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+            if not ok:
+                continue
+            # time range filter on date_field
+            if resolved_date:
+                if not _in_timerange(str(row_map.get(resolved_date, ''))):
+                    continue
+            raw = row_map.get(resolved)
+            if opn == 'distinct_count':
+                raw_str = str(raw) if raw is not None else ''
+                if gby:
+                    key = tuple(str(row_map.get(g, '')).strip() for g in gby)
+                    grouped_distinct.setdefault(key, set()).add(raw_str)
+                else:
+                    distinct_all.add(raw_str)
+                continue
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            num = _clean_numeric(raw)
+            if num is None:
+                continue
+            if gby:
+                key = tuple(str(row_map.get(g, '')).strip() for g in gby)
+                grouped_nums.setdefault(key, []).append(num)
+            else:
+                values.append(num)
+
+        opn = (op or '').strip().lower()
+        def _agg(nums: List[float]) -> float:
+            if not nums:
+                return 0.0
+            if opn == 'sum':
+                return float(sum(nums))
+            if opn == 'avg':
+                return float(sum(nums) / max(1, len(nums)))
+            if opn == 'min':
+                return float(min(nums))
+            if opn == 'max':
+                return float(max(nums))
+            if opn in {'count'}:
+                return float(len(nums))
+            return float(sum(nums))
+
+        if gby:
+            if opn == 'distinct_count':
+                if not grouped_distinct:
+                    return None
+                parts = []
+                for key, s in grouped_distinct.items():
+                    label = ", ".join([str(k) if k is not None else '' for k in key])
+                    parts.append(f"{label}: {float(len(s)):,.2f}")
+                return "\n".join(sorted(parts))
+            if not grouped_nums:
+                return None
+            parts = []
+            for key, nums in grouped_nums.items():
+                label = ", ".join([str(k) if k is not None else '' for k in key])
+                parts.append(f"{label}: {_agg(nums):,.2f}")
+            return "\n".join(sorted(parts))
+        else:
+            if opn == 'distinct_count':
+                return f"{float(len(distinct_all)):,.2f}"
+            total = _agg(values)
+            return f"{total:,.2f}"
+
     def _embed_query(self, text: str) -> Optional[list[float]]:
         """Embed query with OpenAI if available for Qdrant search."""
         if not self.openai_client:
@@ -306,6 +591,129 @@ class RAGService:
         except Exception:
             return []
 
+    def _qdrant_contexts_rich(self, query: str, tenant_id: str, top_k: int = 6) -> List[Dict[str, Any]]:
+        emb = self._embed_query(query)
+        if not emb:
+            return []
+
+    # Public web fallback via Wikipedia API (no API key required)
+    def _public_web_fallback(self, query: str) -> Optional[Dict[str, Any]]:
+        try:
+            q = query.strip()
+            if not q:
+                return None
+            # Step 1: use MediaWiki opensearch to find best title
+            params = {
+                "action": "opensearch",
+                "search": q,
+                "limit": 1,
+                "namespace": 0,
+                "format": "json",
+            }
+            url = "https://en.wikipedia.org/w/api.php?" + urllib.parse.urlencode(params)
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+            if not isinstance(data, list) or len(data) < 4:
+                return None
+            titles = data[1] if isinstance(data[1], list) else []
+            links = data[3] if isinstance(data[3], list) else []
+            if not titles:
+                return None
+            title = titles[0]
+            link = links[0] if links else f"https://en.wikipedia.org/wiki/{urllib.parse.quote(title)}"
+            # Step 2: get summary
+            summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+            with urllib.request.urlopen(summary_url, timeout=6) as resp2:
+                raw2 = resp2.read().decode("utf-8", errors="ignore")
+            sdata = json.loads(raw2)
+            extract = sdata.get("extract") if isinstance(sdata, dict) else None
+            if not isinstance(extract, str) or not extract.strip():
+                return None
+            response = extract.strip()
+            citation = {
+                "source": link,
+                "title": f"Wikipedia • {title}",
+                "relevance": 0.6,
+                "snippet": response[:160],
+            }
+            response_with_notice = (
+                response
+                + "\n\nNote: This answer uses public web information (not your uploaded knowledge).\n"
+                + f"Source: {link}"
+            )
+            return {"response": response_with_notice, "citations": [citation], "confidence": 0.5, "requiresHuman": False}
+        except Exception:
+            return None
+
+    # Public LLM fallback (ChatGPT-style): generate an answer from general knowledge with sources
+    def _public_llm_fallback(self, query: str) -> Optional[Dict[str, Any]]:
+        if not self.openai_client:
+            return None
+        try:
+            system = (
+                "You answer using public knowledge only (no internal DB). Your name is Omni. "
+                "Return STRICT JSON with keys: answer (string), sources (array of {title,url}). "
+                "Prefer authoritative sources (official docs, standards, reputable orgs). "
+                "Include 1-3 sources. If unsure of an exact URL, use the organization's homepage."
+            )
+            completion = self.openai_client.chat.completions.create(
+                model=self.chat_model,
+                temperature=0.3,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": query},
+                ],
+            )
+            raw = (completion.choices[0].message.content or "").strip()
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return None
+            ans = data.get("answer")
+            srcs = data.get("sources")
+            if not isinstance(ans, str) or not ans.strip():
+                return None
+            citations: List[Dict[str, Any]] = []
+            if isinstance(srcs, list):
+                for s in srcs[:3]:
+                    if not isinstance(s, dict):
+                        continue
+                    title = s.get("title")
+                    url = s.get("url")
+                    if isinstance(title, str) and title and isinstance(url, str) and url:
+                        citations.append({
+                            "source": url,
+                            "title": title,
+                            "relevance": 0.6,
+                            "snippet": ans[:160],
+                        })
+            notice = (
+                "\n\nNote: This answer is generated from public web knowledge (not your uploaded knowledge)."
+            )
+            return {"response": ans + notice, "citations": citations, "confidence": 0.6, "requiresHuman": False}
+        except Exception:
+            return None
+        try:
+            results = qdrant_service.search_similar_chunks(query_embedding=emb, tenant_id=tenant_id, top_k=top_k)
+            rich: List[Dict[str, Any]] = []
+            for r in results:
+                payload = r.get("payload") or {}
+                content = payload.get("content")
+                if isinstance(content, str) and content:
+                    rich.append({
+                        "content": content,
+                        "document_id": payload.get("document_id"),
+                        "document_title": payload.get("document_title"),
+                        "chunk_index": payload.get("chunk_index"),
+                        "chapter_num": payload.get("chapter_num"),
+                        "chapter_title": payload.get("chapter_title"),
+                        "page": payload.get("page"),
+                        "score": r.get("score"),
+                    })
+            return rich
+        except Exception:
+            return []
+
     def answer(self, query: str, preselected_contexts: Optional[List[str]] = None, tenant_id: str = "global", db: Optional[Session] = None) -> Dict[str, Any]:
         # Cache by query text across tenants in a simple way; tenant aware cache keys should be added at call site if needed
         cache_key = f"rag:answer:{tenant_id}:{hash(query)}"
@@ -313,14 +721,50 @@ class RAGService:
         if isinstance(cached, dict) and cached.get("response"):
             return cached
 
-        contexts = preselected_contexts if preselected_contexts is not None else self.retriever.retrieve(query, top_k=12)
+        # Identity questions: respond as Omni
+        ql_id = (query or "").strip().lower()
+        if any(p in ql_id for p in ["what is your name", "what's your name", "who are you", "your name", "what is ur name", "name please", "what are you called"]):
+            result_id = {"response": "My name is Omni.", "citations": [], "confidence": 0.99, "requiresHuman": False}
+            redis_cache.set_tenant_key(tenant_id, cache_key, result_id, ttl=self.cache_ttl_seconds)
+            return result_id
+
+        contexts = preselected_contexts if preselected_contexts is not None else self.retriever.retrieve(query, top_k=retrieval.hybrid_top_k)
         # Augment with vector search (Qdrant) when embeddings are available
         try:
-            vector_hits = self._qdrant_contexts(query, tenant_id=tenant_id, top_k=8)
+            vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k)
         except Exception:
+            vector_hits_rich = []
+        # Stitch adjacent chunks for vector results
+        stitched_texts: List[str] = []
+        if vector_hits_rich:
+            for hit in vector_hits_rich:
+                text = hit.get("content") or ""
+                doc_id = hit.get("document_id")
+                idx = hit.get("chunk_index")
+                if isinstance(doc_id, str) and isinstance(idx, int):
+                    try:
+                        neighbors = qdrant_service.get_adjacent_chunks(tenant_id, doc_id, start_index=idx, window=2)
+                    except Exception:
+                        neighbors = []
+                    # Assemble neighbors around the hit, ordered by chunk_index
+                    all_parts = []
+                    # include previous neighbors
+                    prev_parts = [n.get("content", "") for n in neighbors if isinstance(n.get("chunk_index"), int) and n.get("chunk_index") < idx]
+                    prev_parts.sort()
+                    next_parts = [n.get("content", "") for n in neighbors if isinstance(n.get("chunk_index"), int) and n.get("chunk_index") > idx]
+                    next_parts.sort()
+                    all_parts.extend(prev_parts[-2:])
+                    all_parts.append(text)
+                    all_parts.extend(next_parts[:2])
+                    stitched = "\n".join([p for p in all_parts if isinstance(p, str) and p])
+                    if stitched:
+                        stitched_texts.append(stitched)
+            vector_hits = [h.get("content", "") for h in vector_hits_rich if isinstance(h.get("content"), str)]
+        else:
             vector_hits = []
-        if vector_hits:
-            combined = contexts + vector_hits
+
+        if vector_hits or stitched_texts:
+            combined = contexts + stitched_texts + vector_hits
             # Deduplicate while preserving order
             seen = set()
             dedup: list[str] = []
@@ -385,11 +829,145 @@ class RAGService:
         # AI-driven plan: let the model decide the strategy and what to look for
         plan = self.plan(query)
 
+        # Tabular aggregation path (planner-driven, no hardcoded patterns)
+        agg = plan.get('aggregation') if isinstance(plan, dict) else None
+        if agg and isinstance(agg, dict):
+            op = str(agg.get('op') or '')
+            field = str(agg.get('field') or '')
+            sheet = agg.get('sheet')
+            filters = agg.get('filters') if isinstance(agg.get('filters'), list) else []
+            # Prefer deterministic SQL aggregation over structured rows when DB session available
+            if db is not None and op and field:
+                try:
+                    agg_val = self._aggregate_over_rows(
+                        db=db,
+                        tenant_id=tenant_id,
+                        op=op,
+                        field=field,
+                        sheet=sheet,
+                        filters=filters,
+                        group_by=agg.get('group_by'),
+                        date_field=agg.get('date_field'),
+                        time_range=agg.get('time_range'),
+                    )
+                except Exception:
+                    agg_val = None
+                if isinstance(agg_val, str):
+                    response_text = f"Result: {agg_val}"
+                    res = {"response": response_text, "citations": [], "confidence": 0.95, "requiresHuman": False}
+                    redis_cache.set_tenant_key(tenant_id, cache_key, res, ttl=self.cache_ttl_seconds)
+                    return res
+            # Build a focused context of tabular rows
+            # Deterministic aggregation if we have rich hits and a DB session
+            if 'vector_hits_rich' in locals() and vector_hits_rich and db is not None:
+                import csv as _csv, io as _io
+                # Map document_id -> header columns (lowercased) from Document.meta
+                doc_ids = {h.get('document_id') for h in vector_hits_rich if isinstance(h.get('document_id'), str)}
+                doc_columns: dict[str, list[str]] = {}
+                for did in doc_ids:
+                    if not isinstance(did, str):
+                        continue
+                    try:
+                        d = db.get(DbDocument, did)
+                        if d and isinstance(d.meta, dict) and isinstance(d.meta.get('columns'), list):
+                            cols = [str(c).strip().lower() for c in d.meta.get('columns')]
+                            doc_columns[did] = cols
+                    except Exception:
+                        continue
+                # Normalize function
+                def _norm(s: str) -> str:
+                    return s.strip().lower().replace(' ', '_')
+                target_field = _norm(field) if field else ''
+                # Apply filters and aggregate
+                values: list[float] = []
+                for hit in vector_hits_rich:
+                    row_text = hit.get('content') or ''
+                    did = hit.get('document_id')
+                    cols = doc_columns.get(did or '', [])
+                    if not cols:
+                        continue
+                    try:
+                        reader = _csv.reader(_io.StringIO(row_text))
+                        row = next(reader)
+                    except Exception:
+                        continue
+                    # Build row dict
+                    row_map = {}
+                    for i, col in enumerate(cols):
+                        if i < len(row):
+                            row_map[_norm(col)] = str(row[i])
+                    # Filter check
+                    ok = True
+                    for f in filters:
+                        try:
+                            fc = _norm(str(f.get('column')))
+                            fv = str(f.get('value') or '')
+                            if fc and fc in row_map:
+                                if fv and fv.lower() not in row_map[fc].lower():
+                                    ok = False; break
+                        except Exception:
+                            continue
+                    if not ok:
+                        continue
+                    # Extract numeric
+                    val_raw = row_map.get(target_field, '')
+                    if not isinstance(val_raw, str) or not val_raw:
+                        continue
+                    try:
+                        num = float(val_raw.replace(',', '').replace('$', '').strip())
+                        values.append(num)
+                    except Exception:
+                        continue
+                if values:
+                    result_num: float
+                    if op == 'sum':
+                        result_num = float(sum(values))
+                    elif op == 'avg':
+                        result_num = float(sum(values) / max(1, len(values)))
+                    elif op == 'count':
+                        result_num = float(len(values))
+                    else:
+                        result_num = float(sum(values))
+                    response_text = f"Result: {result_num:,.2f}"
+                    res = {"response": response_text, "citations": citations[:3] if 'citations' in locals() else [], "confidence": 0.9, "requiresHuman": False}
+                    redis_cache.set_tenant_key(tenant_id, cache_key, res, ttl=self.cache_ttl_seconds)
+                    return res
+            # Fallback to LLM aggregation if deterministic path unavailable
+            if self.openai_client and op and field:
+                focused = contexts
+                table_text = "\n".join(focused[:50])
+                try:
+                    completion_calc = self.openai_client.chat.completions.create(
+                        model=self.chat_model,
+                        temperature=0,
+                        messages=[
+                            {"role": "system", "content": "You are a precise data analyst. Parse rows and compute the requested aggregate exactly."},
+                            {"role": "user", "content": f"OP={op}; FIELD={field}; FILTERS={filters}; SHEET={sheet or ''}\nROWS:\n{table_text}\n\nReturn only the result prefixed with 'Result: '"},
+                        ],
+                    )
+                    out = (completion_calc.choices[0].message.content or '').strip()
+                    if out:
+                        res = {"response": out, "citations": citations[:3] if 'citations' in locals() else [], "confidence": 0.7, "requiresHuman": False}
+                        redis_cache.set_tenant_key(tenant_id, cache_key, res, ttl=self.cache_ttl_seconds)
+                        return res
+                except Exception:
+                    pass
+
         # Generic path: Use OpenAI chat generation augmented with plan
         # Rerank contexts via LLM if available for better grounding
-        contexts = self.rerank_contexts_via_llm(query, contexts, top_k=12)
+        contexts = self.rerank_contexts_via_llm(query, contexts, top_k=retrieval.rerank_top_k)
 
         if not contexts:
+            # Try LLM public knowledge fallback first
+            pub_res = self._public_llm_fallback(query)
+            if isinstance(pub_res, dict) and pub_res.get("response"):
+                redis_cache.set_tenant_key(tenant_id, cache_key, pub_res, ttl=self.cache_ttl_seconds)
+                return pub_res
+            # Then try Wikipedia summary as a lightweight backup
+            web_res = self._public_web_fallback(query)
+            if isinstance(web_res, dict) and web_res.get("response"):
+                redis_cache.set_tenant_key(tenant_id, cache_key, web_res, ttl=self.cache_ttl_seconds)
+                return web_res
             result = {
                 "response": "I don’t have that information in the current database.",
                 "citations": [],
@@ -443,8 +1021,8 @@ class RAGService:
                 except Exception:
                     pass
 
-        # List chapter titles (e.g., "list out all 3 chapters title", "list chapter titles")
-        if ("chapter" in ql_simple) and ("title" in ql_simple or "titles" in ql_simple or "list" in ql_simple):
+        # Optional rule-based helpers (can be disabled via tuning)
+        if retrieval.rules_enabled and ("chapter" in ql_simple) and ("title" in ql_simple or "titles" in ql_simple or "list" in ql_simple):
             # Extract desired count if specified
             desired_n = None
             mnum = re.search(r"\b(\d{1,3})\b", ql_simple)
@@ -495,7 +1073,7 @@ class RAGService:
 
         # Chapter summary request (e.g., "summary of chapter 1")
         m_sum = re.search(r"summary\s+of\s+chapter\s+(\d+)", ql_simple)
-        if m_sum:
+        if retrieval.rules_enabled and m_sum:
             try:
                 ch = int(m_sum.group(1))
             except Exception:
@@ -540,6 +1118,36 @@ class RAGService:
                     except Exception:
                         pass
 
+        # Simple table aggregation patterns (can be disabled)
+        m_total = re.search(r"total\s+(sales|amount|revenue)[^\d]*(\d{4})[^\w]+in\s+([\w\s]+)$", ql_simple)
+        if retrieval.rules_enabled and m_total:
+            metric = m_total.group(1)
+            year = m_total.group(2)
+            sheet = m_total.group(3).strip()
+            # Heuristic: pull contexts mentioning the sheet name or the year
+            filtered = [c for c in contexts if sheet.lower() in c.lower() or year in c]
+            if not filtered:
+                filtered = contexts
+            # Ask the LLM to compute the total from provided rows
+            focus_text = "\n".join(filtered[:20])
+            if self.openai_client:
+                try:
+                    completion4 = self.openai_client.chat.completions.create(
+                        model=self.chat_model,
+                        temperature=0,
+                        messages=[
+                            {"role": "system", "content": "You are a precise calculator. Sum only values matching the YEAR and SHEET hint."},
+                            {"role": "user", "content": f"YEAR={year}; SHEET={sheet}; ROWS:\n{focus_text}\n\nReturn only the numeric total prefixed with 'Total: '"},
+                        ],
+                    )
+                    out = (completion4.choices[0].message.content or "").strip()
+                    if out:
+                        result_sum2 = {"response": out, "citations": citations[:3], "confidence": 0.7, "requiresHuman": False}
+                        redis_cache.set_tenant_key(tenant_id, cache_key, result_sum2, ttl=self.cache_ttl_seconds)
+                        return result_sum2
+                except Exception:
+                    pass
+
         context_text = "\n\n".join(contexts)
 
         generated_text = None
@@ -565,15 +1173,38 @@ class RAGService:
             # Fallback concise answer mirroring sample formatting
             generated_text = f"{self.no_info_text}" if not contexts else contexts[0][:300]
 
-        # Build citations list (best-effort without file metadata here)
-        citations = []
-        for i, ctx in enumerate(contexts[:6]):
-            citations.append({
-                "source": f"chunk_{i}",
-                "title": f"Context {i+1}",
-                "relevance": 0.8,
-                "snippet": ctx[:160],
-            })
+        # Build grounded citations using vector hit metadata when available
+        citations: List[Dict[str, Any]] = []
+        try:
+            if 'vector_hits_rich' in locals() and vector_hits_rich:
+                for i, hit in enumerate(vector_hits_rich[:6]):
+                    title = hit.get('document_title') or f"Document {i+1}"
+                    chap = hit.get('chapter_title')
+                    page = hit.get('page')
+                    pieces = [p for p in [title, f"Chapter {hit.get('chapter_num')}" if hit.get('chapter_num') is not None else None, f"Page {page}" if page else None] if p]
+                    cite_title = " • ".join(pieces) if pieces else title
+                    citations.append({
+                        "source": hit.get('document_id') or f"doc_{i}",
+                        "title": cite_title,
+                        "relevance": float(hit.get('score') or 0.8),
+                        "snippet": (hit.get('content') or '')[:160],
+                    })
+            else:
+                for i, ctx in enumerate(contexts[:6]):
+                    citations.append({
+                        "source": f"chunk_{i}",
+                        "title": f"Context {i+1}",
+                        "relevance": 0.8,
+                        "snippet": ctx[:160],
+                    })
+        except Exception:
+            for i, ctx in enumerate(contexts[:6]):
+                citations.append({
+                    "source": f"chunk_{i}",
+                    "title": f"Context {i+1}",
+                    "relevance": 0.8,
+                    "snippet": ctx[:160],
+                })
 
         result = {
             "response": generated_text,
@@ -587,10 +1218,10 @@ class RAGService:
             expansions = self.expand_queries(query)
             if expansions:
                 expanded_contexts: List[str] = []
-                for q2 in expansions[:4]:
-                    expanded_contexts.extend(self.retriever.retrieve(q2, top_k=8))
+                for q2 in expansions[: retrieval.expand_variants]:
+                    expanded_contexts.extend(self.retriever.retrieve(q2, top_k=retrieval.vector_top_k))
                     try:
-                        expanded_contexts.extend(self._qdrant_contexts(q2, tenant_id=tenant_id, top_k=6))
+                        expanded_contexts.extend(self._qdrant_contexts(q2, tenant_id=tenant_id, top_k=retrieval.vector_top_k))
                     except Exception:
                         pass
                 combined2 = expanded_contexts + contexts

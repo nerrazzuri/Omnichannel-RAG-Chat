@@ -71,6 +71,9 @@ def _ensure_sqlite_migrations() -> None:
     """
     if not DATABASE_URL.startswith("sqlite"):
         return
+    # Allow disabling dev shim via env flag
+    if os.getenv("ENABLE_SQLITE_DEV_SHIM", "true").lower() not in {"1","true","yes"}:
+        return
     try:
         with engine.connect() as conn:
             # Check conversations table exists

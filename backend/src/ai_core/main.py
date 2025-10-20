@@ -46,6 +46,21 @@ logger.setLevel(logging.INFO)
 logger.handlers = [handler]
 app_logger = logging.getLogger(__name__)
 
+# Correlation ID middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+import uuid as _uuid
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        corr_id = request.headers.get("X-Correlation-ID") or str(_uuid.uuid4())
+        # attach to request state
+        request.state.correlation_id = corr_id
+        # add to logs
+        logging.LoggerAdapter(logger, {"correlation_id": corr_id})
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = corr_id
+        return response
+
 REQUEST_COUNT = Counter('ai_core_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
 REQUEST_LATENCY = Histogram('ai_core_request_latency_seconds', 'Request latency', ['endpoint'])
 
@@ -98,6 +113,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add correlation ID middleware
+app.add_middleware(CorrelationIdMiddleware)
 
 # Global exception handler to ensure JSON responses
 @app.exception_handler(Exception)

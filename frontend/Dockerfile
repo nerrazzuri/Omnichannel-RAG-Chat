@@ -32,11 +32,11 @@ RUN adduser --system --uid 1001 nextjs
 COPY package*.json ./
 
 # Install production dependencies only
-RUN npm ci --only=production
+RUN npm install --omit=dev && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# public is optional; copy only if exists
 COPY --from=builder /app/next.config.js ./
 
 # Set proper ownership

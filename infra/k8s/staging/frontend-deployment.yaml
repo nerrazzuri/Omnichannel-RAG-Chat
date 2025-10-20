@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ghcr.io/your-org/frontend:staging
+          image: ghcr.io/nerrazzuri/omni-frontend:staging
           ports:
             - containerPort: 3000
           env:

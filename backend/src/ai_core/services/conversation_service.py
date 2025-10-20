@@ -33,6 +33,17 @@ class ConversationService:
         )
         existing = self.db.execute(stmt).scalars().first()
         if existing:
+            # If conversation has no messages yet, seed Omni greeting
+            try:
+                from sqlalchemy import func
+                count = self.db.execute(
+                    select(func.count()).select_from(Message).where(Message.conversation_id == existing.id)
+                ).scalar() or 0
+                if count == 0:
+                    greeting = "Hello! I’m Omni. How can I help you today?"
+                    self.add_message(existing, sender_type="SYSTEM", content=greeting)
+            except Exception:
+                pass
             return existing
 
         convo = Conversation(
@@ -45,6 +56,12 @@ class ConversationService:
         self.db.add(convo)
         self.db.commit()
         self.db.refresh(convo)
+        # Initial greeting from Omni
+        try:
+            greeting = "Hello! I’m Omni. How can I help you today?"
+            self.add_message(convo, sender_type="SYSTEM", content=greeting)
+        except Exception:
+            pass
         return convo
 
     def add_message(

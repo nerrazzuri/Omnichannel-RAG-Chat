@@ -1,0 +1,97 @@
+name: Infra Staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra-staging.yml'
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform/staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform Init
+        env:
+          TF_CLI_ARGS_init: -input=false
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan (staging)
+        env:
+          # Set provider credentials as needed (choose your cloud and set secrets accordingly)
+          # AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          # Azure: AZURE_CREDENTIALS (JSON for service principal)
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          # GCP: GOOGLE_CREDENTIALS (JSON service account key)
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          terraform plan -input=false -no-color -var="environment=staging"
+
+  k8s-apply:
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+
+      - name: (Option A) Use kubeconfig secret if provided
+        if: ${{ secrets.KUBE_CONFIG_STAGING != '' }}
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_STAGING }}
+        run: |
+          mkdir -p ~/.kube
+          echo "$KUBE_CONFIG" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl version --client=true
+          kubectl cluster-info
+
+      - name: (Option B) Auth to GCP and get GKE credentials
+        if: ${{ secrets.KUBE_CONFIG_STAGING == '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+      - name: Setup gcloud (when using GCP auth)
+        if: ${{ secrets.KUBE_CONFIG_STAGING == '' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Fetch GKE kubeconfig (when using GCP auth)
+        if: ${{ secrets.KUBE_CONFIG_STAGING == '' }}
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
+          GKE_REGION: ${{ secrets.GKE_REGION }}
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region "$GKE_REGION" --project "$GCP_PROJECT_ID"
+          kubectl cluster-info
+
+      - name: Apply manifests (staging)
+        run: |
+          kubectl apply -f infra/k8s/staging/
+          kubectl rollout status deployment/ai-core -n default --timeout=120s || true
+          kubectl rollout status deployment/frontend -n default --timeout=120s || true
+
+

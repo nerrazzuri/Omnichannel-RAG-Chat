@@ -1,11 +1,12 @@
 """
 Tenant document upload API.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from ai_core.models.knowledge import DocumentUploadRequest, DocumentUploadResponse
 from ai_core.services.document_service import DocumentService
 from shared.database.session import get_db
+from shared.cache.redis import redis_cache
 
 router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 
@@ -25,6 +26,7 @@ async def upload_document_file(
     tenantId: str = Form(...),
     title: str = Form(...),
     knowledgeBaseId: str = Form("00000000-0000-0000-0000-000000000000"),
+    jobId: str = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -51,20 +53,50 @@ async def upload_document_file(
         
         # No hard file size limit enforced here; rely on infrastructure (reverse proxy/app server) limits
         
+        # Initialize progress tracking if jobId provided
+        if jobId:
+            try:
+                redis_cache.set_tenant_key(tenantId, f"upload:job:{jobId}", {"phase": "processing", "progress": 0}, ttl=3600)
+            except Exception:
+                pass
+
         svc = DocumentService(db)
         name = file.filename.lower() if file.filename else ""
         
         # Process based on file type
         if name.endswith('.csv') or name.endswith('.xlsx'):
-            rows = svc.extract_rows_from_file(file.filename, data)
-            if not rows:
-                raise HTTPException(status_code=400, detail="No data found in the file")
-            doc_id, chunk_count = svc.process_rows_and_store(tenantId, title, rows, knowledgeBaseId)
+            if name.endswith('.xlsx'):
+                # Ingest all sheets: create a document per sheet
+                sheets = svc.extract_rows_by_sheet(file.filename, data)
+                total_chunks = 0
+                first_doc_id = None
+                for sheet_name, rows in sheets.items():
+                    if not rows:
+                        continue
+                    sid, cnt = svc.process_rows_and_store(
+                        tenantId,
+                        f"{title} - {sheet_name}",
+                        rows,
+                        knowledgeBaseId,
+                        progress_job_id=jobId,
+                        sheet_name=sheet_name,
+                    )
+                    total_chunks += cnt
+                    if first_doc_id is None:
+                        first_doc_id = sid
+                if first_doc_id is None:
+                    raise HTTPException(status_code=400, detail="No data found in the workbook")
+                doc_id, chunk_count = first_doc_id, total_chunks
+            else:
+                rows = svc.extract_rows_from_file(file.filename, data)
+                if not rows:
+                    raise HTTPException(status_code=400, detail="No data found in the file")
+                doc_id, chunk_count = svc.process_rows_and_store(tenantId, title, rows, knowledgeBaseId, progress_job_id=jobId)
         else:
             extracted = svc.extract_text_from_file(file.filename, data)
             if not extracted or not extracted.strip():
                 raise HTTPException(status_code=400, detail="No text content could be extracted from the file")
-            doc_id, chunk_count = svc.process_and_store(tenantId, title, extracted, knowledgeBaseId)
+            doc_id, chunk_count = svc.process_and_store(tenantId, title, extracted, knowledgeBaseId, progress_job_id=jobId)
         
         return DocumentUploadResponse(documentId=doc_id, chunkCount=chunk_count, status="INDEXED")
     
@@ -85,5 +117,14 @@ async def upload_document_file(
             status_code=500,
             detail=f"Failed to process document: {str(e)}"
         )
+@router.get("/upload_status")
+def upload_status(tenantId: str = Query(...), jobId: str = Query(...)) -> dict:
+    try:
+        data = redis_cache.get_tenant_key(tenantId, f"upload:job:{jobId}")
+        if not isinstance(data, dict):
+            return {"jobId": jobId, "phase": "unknown", "progress": 0}
+        return {"jobId": jobId, **data}
+    except Exception:
+        return {"jobId": jobId, "phase": "unknown", "progress": 0}
 
 

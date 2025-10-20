@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ai-core
-          image: ghcr.io/your-org/ai-core:staging
+          image: ghcr.io/nerrazzuri/omni-ai-core:staging
           ports:
             - containerPort: 8000
           env:
