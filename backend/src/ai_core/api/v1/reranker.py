@@ -1,11 +1,10 @@
 """API endpoints for reranker management."""
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, List
 from pydantic import BaseModel
  
 from ...services.reranker_service import get_reranker, create_reranker
 from ...services.rag_service import RAGService
-from ...main import get_current_user
  
 router = APIRouter(prefix="/reranker", tags=["reranker"])
  
@@ -23,7 +22,6 @@ class RerankResponse(BaseModel):
 @router.post("/rerank", response_model=RerankResponse)
 async def rerank_documents(
     request: RerankRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """Rerank documents using the advanced reranker."""
     try:
@@ -44,9 +42,7 @@ async def rerank_documents(
         raise HTTPException(status_code=500, detail=str(e))
  
 @router.get("/status")
-async def get_reranker_status(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
+async def get_reranker_status():
     """Get reranker status and configuration."""
     try:
         # 从RAGService获取状态
@@ -58,7 +54,6 @@ async def get_reranker_status(
 @router.post("/toggle")
 async def toggle_reranker(
     enabled: bool,
-    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """Toggle reranker on/off."""
     try:
@@ -69,9 +64,7 @@ async def toggle_reranker(
         raise HTTPException(status_code=500, detail=str(e))
  
 @router.post("/clear-cache")
-async def clear_reranker_cache(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
+async def clear_reranker_cache():
     """Clear reranker caches."""
     try:
         reranker = get_reranker()
