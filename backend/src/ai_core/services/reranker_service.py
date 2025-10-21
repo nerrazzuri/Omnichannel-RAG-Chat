@@ -22,9 +22,8 @@ import os
 # Local imports
 from shared.cache.redis import redis_cache
 from shared.config.tuning import reranker_config
-from shared.utils.logging import setup_logger
- 
-logger = setup_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
  
 @dataclass
 class RankingFeatures:
