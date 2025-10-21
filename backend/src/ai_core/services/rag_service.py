@@ -872,6 +872,17 @@ class RAGService:
                     seen.add(k)
                     dedup.append(c)
                 contexts = dedup[:20]
+
+        # LLM reranking for final context ordering
+        if contexts:
+            try:
+                contexts = self.rerank_contexts_via_llm(
+                    query,
+                    contexts,
+                    top_k=getattr(retrieval, 'rerank_top_k', 10),
+                )
+            except Exception:
+                pass
         # If policy-like question, extract precise sentences as a shortcut answer
         ql = query.lower()
         def split_sentences(text: str) -> List[str]:
