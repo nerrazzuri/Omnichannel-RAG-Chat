@@ -15,6 +15,7 @@ from ai_core.api.webhooks.teams import router as teams_router
 from ai_core.api.webhooks.telegram import router as telegram_router
 from ai_core.api.v1.internal import router as internal_router
 from ai_core.api.v1.tenant import router as tenant_router
+from .api.v1.reranker import router as reranker_router
 from shared.database.session import create_tables, SessionLocal
 from shared.database.models import Tenant
 import uuid
@@ -160,6 +161,7 @@ app.include_router(internal_router)
 app.include_router(teams_router)
 app.include_router(telegram_router)
 app.include_router(tenant_router)
+app.include_router(reranker_router)
 
 if __name__ == "__main__":
     import uvicorn

@@ -4,6 +4,8 @@ augmented with OpenAI chat generation using a strict prompt to avoid
 hallucinations.
 """
 from typing import List, Dict, Any, Optional
+import logging
+import time
 import difflib
 from datetime import datetime
 from collections import defaultdict, Counter
@@ -20,6 +22,16 @@ from openai import OpenAI
 from shared.vector.qdrant import qdrant_service
 from shared.config.tuning import retrieval
 from shared.database.models import Document as DbDocument, KnowledgeChunk as DbChunk, KnowledgeBase as DbKB
+from .reranker_service import get_reranker, RerankingResult
+from shared.config.tuning import reranker_config
+from prometheus_client import Counter, Histogram
+
+logger = logging.getLogger(__name__)
+ 
+# 添加监控指标
+RERANK_REQUESTS = Counter('rag_rerank_requests_total', 'Total reranking requests')
+RERANK_LATENCY = Histogram('rag_rerank_latency_seconds', 'Reranking latency')
+RERANK_ERRORS = Counter('rag_rerank_errors_total', 'Reranking errors')
 
 class StandardBM25:
     def __init__(self, corpus: List[str], k1: float = 1.5, b: float = 0.75):
@@ -160,6 +172,10 @@ class RAGService:
         # Default models and parameters aligned with samples
         self.chat_model = os.getenv("RAG_CHAT_MODEL", "gpt-5-mini")
         self.chat_temperature = float(os.getenv("RAG_CHAT_TEMPERATURE", "0.3"))
+        self.reranker = get_reranker()
+        self.reranker_enabled = True  # 可以通过配置控制
+        
+        logger.info(f"RAGService initialized with reranker: {self.reranker.get_model_info()}")
         # Strict prompt to keep answers grounded
         self.prompt_template = (
             "You are a professional corporate assistant with access to internal company documents. Your name is Omni.\n\n"
@@ -170,6 +186,10 @@ class RAGService:
             "---\nCONTEXT:\n{context}\n---\nQUESTION:\n{question}\n---\nAnswer:"
         )
         self.no_info_text = "I don’t have that information in the current database."
+        self.reranker = get_reranker()
+        self.reranker_enabled = reranker_config.cache_enabled
+        
+        logger.info(f"RAGService initialized with reranker: {self.reranker.get_model_info()}")
 
     def load_documents(self, docs: List[str]) -> None:
         self.retriever.index(docs)
@@ -787,6 +807,7 @@ class RAGService:
         contexts: List[str] = []
         vector_hits_rich: List[Dict[str, Any]] = []
         emb_avg = None
+
         # Prefer true hybrid over the same tenant corpus when DB session is available
         if db is not None:
             try:
@@ -958,6 +979,44 @@ class RAGService:
                     seen.add(k)
                     dedup.append(c)
                 contexts = dedup[:20]
+                reranking_info = None
+        if self.reranker_enabled and contexts and len(contexts) > 3:
+            RERANK_REQUESTS.inc()
+            start_time = time.time()
+            
+            try:
+                logger.info(f"Applying reranking to {len(contexts)} contexts")
+                
+                # Get BiEncoder scores
+                bi_encoder_scores = self._get_bi_encoder_scores(query, contexts, vector_hits_rich)
+                
+                # Execute reranking
+                rerank_result = self.reranker.multi_stage_reranking(
+                    query=query,
+                    documents=contexts,
+                    bi_encoder_scores=bi_encoder_scores,
+                    top_k=min(retrieval.rerank_top_k, len(contexts))
+                )
+                
+                # Update contexts with reranked results
+                contexts = rerank_result.documents
+                
+                processing_time = time.time() - start_time
+                RERANK_LATENCY.observe(processing_time)
+                
+                reranking_info = {
+                    "method": rerank_result.method_used,
+                    "processing_time": processing_time,
+                    "original_count": len(contexts),
+                    "reranked_count": len(rerank_result.documents)
+                }
+                
+                logger.info(f"Reranking completed: method={rerank_result.method_used}, time={processing_time:.3f}s")
+                
+            except Exception as e:
+                RERANK_ERRORS.inc()
+                logger.error(f"Reranking failed: {e}")
+                reranking_info = {"error": str(e), "fallback": True}
 
         # LLM reranking for final context ordering
         if contexts:
@@ -1018,6 +1077,8 @@ class RAGService:
                     "requiresHuman": False,
                 }
                 redis_cache.set_tenant_key("global", cache_key, result, ttl=self.cache_ttl_seconds)
+                if reranking_info:
+                    result["reranking"] = reranking_info
                 return result
 
         # AI-driven plan: let the model decide the strategy and what to look for
@@ -1169,6 +1230,8 @@ class RAGService:
                 "requiresHuman": True,
             }
             redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
+            if reranking_info:
+                result["reranking"] = reranking_info
             return result
 
         # If the user asks for chapter counts, try to compute from Qdrant payloads
@@ -1183,6 +1246,8 @@ class RAGService:
                     response = f"There are at least {count} chapters indexed from the uploaded documents."
                     result = {"response": response, "citations": [], "confidence": 0.7, "requiresHuman": False}
                     redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
+                    if reranking_info:
+                        result["reranking"] = reranking_info
                     return result
             except Exception:
                 pass
@@ -1211,6 +1276,8 @@ class RAGService:
                         response = f"There are at least {count} chapters indexed from the uploaded documents."
                         result = {"response": response, "citations": [], "confidence": 0.65, "requiresHuman": False}
                         redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
+                        if reranking_info:
+                            result["reranking"] = reranking_info
                         return result
                 except Exception:
                     pass
@@ -1260,6 +1327,8 @@ class RAGService:
                     response = bullets if bullets else "I don’t have that information in the current database."
                     result = {"response": response, "citations": [], "confidence": 0.75 if bullets else 0.0, "requiresHuman": False if bullets else True}
                     redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
+                    if reranking_info:
+                        result["reranking"] = reranking_info
                     return result
             except Exception:
                 # fall back to generic path below
@@ -1406,6 +1475,8 @@ class RAGService:
             "confidence": 0.9 if contexts and generated_text else 0.4,
             "requiresHuman": False if contexts else True,
         }
+        if reranking_info:
+            result["reranking"] = reranking_info
         redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
         # If the model responded with the no-info string, try one iterative expansion pass
         if self.no_info_text in (generated_text or ""):
@@ -1474,6 +1545,69 @@ class RAGService:
                         }
                         redis_cache.set_tenant_key(tenant_id, cache_key, result3, ttl=self.cache_ttl_seconds)
                         return result3
+        if reranking_info:
+            result["reranking"] = reranking_info
         return result
 
 
+    def _get_bi_encoder_scores(self, query: str, contexts: List[str], 
+                              vector_hits_rich: List[Dict[str, Any]]) -> List[float]:
+        """Get BiEncoder scores from vector search results."""
+        scores = [1.0] * len(contexts)  # Default scores
+        
+        if not vector_hits_rich:
+            return scores
+        
+        # Create content to score mapping
+        content_to_score = {}
+        for hit in vector_hits_rich:
+            content = hit.get('content', '')
+            score = hit.get('score', 0.0)
+            if content:
+                content_to_score[content] = score
+        
+        # Match scores for each context
+        for i, context in enumerate(contexts):
+            # Try exact match
+            if context in content_to_score:
+                scores[i] = content_to_score[context]
+            else:
+                # Try partial match
+                for content, score in content_to_score.items():
+                    if context in content or content in context:
+                        scores[i] = max(scores[i], score * 0.8)  # Partial match discount
+                        break
+        
+        return scores
+ 
+    def toggle_reranker(self, enabled: bool = None) -> bool:
+        """Toggle reranker on/off."""
+        if enabled is not None:
+            self.reranker_enabled = enabled
+            logger.info(f"Reranker {'enabled' if enabled else 'disabled'}")
+        return self.reranker_enabled
+ 
+    def get_reranker_status(self) -> Dict[str, Any]:
+        """Get reranker status and configuration."""
+        return {
+            "enabled": self.reranker_enabled,
+            "model_info": self.reranker.get_model_info(),
+            "config": {
+                "ltr_enabled": reranker_config.ltr_enabled,
+                "cache_enabled": reranker_config.cache_enabled,
+                "cross_encoder_model": reranker_config.cross_encoder_model
+            }
+        }
+ 
+    def clear_reranker_cache(self):
+        """Clear reranker caches."""
+        self.reranker.clear_cache()
+        logger.info("Reranker caches cleared")
+ 
+    async def shutdown(self):
+        """Cleanup resources."""
+        if hasattr(self, 'reranker'):
+            try:
+                self.reranker.clear_cache()
+            except Exception as e:
+                logger.error(f"Error during shutdown: {e}")

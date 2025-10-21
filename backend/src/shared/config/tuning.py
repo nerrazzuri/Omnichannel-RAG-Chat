@@ -60,9 +60,28 @@ class RetrievalConfig:
     fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")
     fine_tune_model_path: str = os.getenv("EMBED_FINE_TUNE_MODEL_PATH", "")
 
-
+@dataclass(frozen=True)
+class RerankerConfig:
+    # CrossEncoder设置
+    cross_encoder_model: str = os.getenv("RERANK_CROSS_ENCODER", "cross-encoder/ms-marco-electra-base")
+    cross_encoder_batch_size: int = _get_int("RERANK_BATCH_SIZE", 16)
+    cross_encoder_max_length: int = _get_int("RERANK_MAX_LENGTH", 512)
+    
+    # LTR设置
+    ltr_model_path: str = os.getenv("RERANK_LTR_MODEL_PATH", "")
+    ltr_enabled: bool = os.getenv("RERANK_LTR_ENABLED", "false").lower() in ("1", "true", "yes")
+    
+    # 融合权重
+    fusion_bi_weight: float = _get_float("RERANK_BI_WEIGHT", 0.3)
+    fusion_cross_weight: float = _get_float("RERANK_CROSS_WEIGHT", 0.7)
+    
+    # 缓存设置
+    cache_enabled: bool = os.getenv("RERANK_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
+    cache_ttl: int = _get_int("RERANK_CACHE_TTL", 3600)
+ 
 # Singleton-style accessors
 chunking = ChunkingConfig()
 retrieval = RetrievalConfig()
+reranker_config = RerankerConfig()  # 新增的
 
 
