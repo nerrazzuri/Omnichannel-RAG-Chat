@@ -6,7 +6,7 @@ hallucinations.
 from typing import List, Dict, Any, Optional
 import difflib
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, Counter
 import math
 import re
 import os
@@ -21,72 +21,72 @@ from shared.vector.qdrant import qdrant_service
 from shared.config.tuning import retrieval
 from shared.database.models import Document as DbDocument, KnowledgeChunk as DbChunk, KnowledgeBase as DbKB
 
-# Placeholder lightweight BM25 implementation using term frequency
-class BM25Lite:
-    def __init__(self, docs: List[str]):
-        self.docs = docs
-        self.doc_count = len(docs)
-        self.avgdl = sum(len(d.split()) for d in docs) / max(1, self.doc_count)
+class StandardBM25:
+    def __init__(self, corpus: List[str], k1: float = 1.5, b: float = 0.75):
+        self.k1 = k1
+        self.b = b
+        self.corpus = corpus
+        self.doc_count = len(corpus)
+        self.doc_len: List[int] = []
+        self.doc_freqs: List[Counter] = []
+        self.vocab: List[str] = []
+        self.idf: Dict[str, float] = {}
+        self.avgdl = (sum(len(doc.split()) for doc in corpus) / self.doc_count) if self.doc_count else 0.0
+        self._build_stats()
 
-    def score(self, query: str, k1: float = 1.5, b: float = 0.75) -> List[float]:
+    def _build_stats(self) -> None:
+        vocab_set = set()
+        for doc in self.corpus:
+            words = doc.lower().split()
+            self.doc_len.append(len(words))
+            cnt = Counter(words)
+            self.doc_freqs.append(cnt)
+            vocab_set.update(cnt.keys())
+        self.vocab = list(vocab_set)
+        self._compute_idf()
+
+    def _compute_idf(self) -> None:
+        N = max(1, self.doc_count)
+        for term in self.vocab:
+            n = sum(1 for df in self.doc_freqs if term in df)
+            # Standard BM25 IDF
+            self.idf[term] = math.log((N - n + 0.5) / (n + 0.5))
+
+    def score(self, query: str) -> List[float]:
+        if not self.corpus:
+            return []
         q_terms = query.lower().split()
-        scores = []
-        for d in self.docs:
-            terms = d.lower().split()
-            dl = len(terms)
-            tf = defaultdict(int)
-            for t in terms:
-                tf[t] += 1
+        scores: List[float] = []
+        for i, df in enumerate(self.doc_freqs):
             score = 0.0
+            dl = self.doc_len[i] if i < len(self.doc_len) else 0
             for qt in q_terms:
-                f = tf.get(qt, 0)
-                if f == 0:
+                if qt not in df:
                     continue
-                idf = math.log((self.doc_count - 1 + 0.5) / (1 + 0.5))  # simple idf approx
-                score += idf * (f * (k1 + 1)) / (f + k1 * (1 - b + b * dl / max(1, self.avgdl)))
+                tf = df[qt]
+                idf = self.idf.get(qt, 0.0)
+                denom = tf + self.k1 * (1 - self.b + self.b * (dl / max(1.0, self.avgdl)))
+                score += idf * ((tf * (self.k1 + 1)) / max(1e-9, denom))
             scores.append(score)
         return scores
 
 
 class HybridRetriever:
     def __init__(self):
-        # In a real system: load vector store client (e.g., Qdrant) and embeddings
         self.corpus = []
-        self.bm25 = None
+        self.bm25: Optional[StandardBM25] = None
 
     def index(self, documents: List[str]) -> None:
         self.corpus = documents[:]
-        self.bm25 = BM25Lite(self.corpus)
+        self.bm25 = StandardBM25(self.corpus)
 
     def dense_search(self, query: str, top_k: int = 5) -> List[int]:
-        # Improved scoring with both length and content similarity
-        q_len = len(query)
-        query_lower = query.lower()
-        query_words = set(query_lower.split())
-        
-        scored = []
-        for i, doc in enumerate(self.corpus):
-            doc_lower = doc.lower()
-            doc_words = set(doc_lower.split())
-            
-            # Calculate Jaccard similarity for word overlap
-            intersection = len(query_words & doc_words)
-            union = len(query_words | doc_words)
-            jaccard = intersection / max(1, union)
-            
-            # Length similarity (normalized)
-            length_sim = 1.0 / (1.0 + abs(len(doc) - q_len) / max(q_len, 1))
-            
-            # Combined score with emphasis on content similarity
-            score = (jaccard * 2.0) + length_sim
-            scored.append((i, score))
-        
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [i for i, _ in scored[:top_k]]
+        # Removed bogus token-overlap "dense" search. True dense retrieval is handled via Qdrant in RAGService.
+        return []
 
     def keyword_search(self, query: str, top_k: int = 5) -> List[int]:
         if not self.bm25:
-            self.bm25 = BM25Lite(self.corpus)
+            self.bm25 = StandardBM25(self.corpus)
         scores = self.bm25.score(query)
         
         # Boost scores for exact query matches
