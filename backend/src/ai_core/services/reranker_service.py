@@ -3,7 +3,6 @@ Advanced Reranking Service for RAG pipeline.
 Implements multi-stage reranking with cross-encoder and learning-to-rank.
 Production-ready with caching, monitoring, and error handling.
 """
-import torch
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Tuple, Any, Optional, Union
@@ -135,8 +134,14 @@ class AdvancedReranker:
                  ltr_model_path: Optional[str] = None,
                  enable_async: bool = True):
         
-        # Configuration
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Configuration: detect torch lazily (optional)
+        try:
+            import torch as _torch  # type: ignore
+            self._torch_available = True
+            self.device = "cuda" if getattr(_torch, "cuda", None) and _torch.cuda.is_available() else "cpu"
+        except Exception:
+            self._torch_available = False
+            self.device = "cpu"
         self.enable_async = enable_async
         self.cache = RerankerCache(reranker_config.cache_enabled)
         
