@@ -18,7 +18,6 @@ from contextlib import asynccontextmanager
  
 # ML Libraries
 import os
-import joblib
  
 # Local imports
 from shared.cache.redis import redis_cache
@@ -628,6 +627,7 @@ class AdvancedReranker:
         """Save trained LTR model and scaler."""
         if self.ltr_model is not None:
             try:
+                import joblib  # lazy import
                 model_data = {
                     'model': self.ltr_model,
                     'scaler': self.feature_scaler,
@@ -647,6 +647,7 @@ class AdvancedReranker:
         """Load trained LTR model and scaler."""
         try:
             if os.path.exists(model_path):
+                import joblib  # lazy import
                 model_data = joblib.load(model_path)
                 self.ltr_model = model_data['model']
                 self.feature_scaler = model_data['scaler']
