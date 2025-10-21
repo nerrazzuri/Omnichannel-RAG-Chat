@@ -80,10 +80,6 @@ class HybridRetriever:
         self.corpus = documents[:]
         self.bm25 = StandardBM25(self.corpus)
 
-    def dense_search(self, query: str, top_k: int = 5) -> List[int]:
-        # Removed bogus token-overlap "dense" search. True dense retrieval is handled via Qdrant in RAGService.
-        return []
-
     def keyword_search(self, query: str, top_k: int = 5) -> List[int]:
         if not self.bm25:
             self.bm25 = StandardBM25(self.corpus)
@@ -915,7 +911,7 @@ class RAGService:
             # BM25 normalize
             bm25_scores: List[float] = []
             if candidates:
-                bm = BM25Lite(candidates)
+                bm = StandardBM25(candidates)
                 bm25_scores = bm.score(query)
                 if bm25_scores:
                     m = max(bm25_scores) or 1.0
