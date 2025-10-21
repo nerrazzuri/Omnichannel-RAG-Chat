@@ -797,7 +797,7 @@ class RAGService:
                 vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
             except Exception:
                 vector_hits_rich = []
-            # Build BM25 over tenant chunk corpus
+            # Build BM25 over tenant chunk corpus with IDs for true fusion
             try:
                 q = (
                     db.query(KnowledgeChunk, Document, KnowledgeBase)
@@ -805,66 +805,70 @@ class RAGService:
                     .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
                     .filter(KnowledgeBase.tenant_id == tenant_id)
                 )
-                # Cap corpus size for performance
                 tenant_pairs = q.limit(2000).all()
+                id_to_content: Dict[str, str] = {}
                 corpus_texts: List[str] = []
+                idx_to_id: List[str] = []
+                sig_to_id: Dict[str, str] = {}
                 for kc, _doc, _kb in tenant_pairs:
                     c = getattr(kc, 'content', None)
-                    if isinstance(c, str) and c.strip():
+                    kid = str(getattr(kc, 'id', ''))
+                    if isinstance(c, str) and c.strip() and kid:
+                        id_to_content[kid] = c
+                        idx_to_id.append(kid)
                         corpus_texts.append(c)
+                        sig_to_id[c[:200].lower()] = kid
                 bm25 = StandardBM25(corpus_texts)
                 bm_scores = bm25.score(query)
-                # Normalize BM25 scores
-                if bm_scores:
-                    max_bm = max(bm_scores) or 1.0
-                    bm_scores = [s / max_bm for s in bm_scores]
-                # Vector score map by content signature
-                vec_map: Dict[str, float] = {}
+                # Normalize BM25
+                max_bm = max(bm_scores) if bm_scores else 1.0
+                bm25_results: List[Dict[str, Any]] = []
+                for i, s in enumerate(bm_scores):
+                    if 0 <= i < len(idx_to_id):
+                        bm25_results.append({"id": idx_to_id[i], "score": (s / max(1e-9, max_bm))})
+                # Vector results mapped to chunk IDs
+                vec_accum: Dict[str, float] = {}
+                unmapped_texts: List[str] = []
                 for h in vector_hits_rich:
                     t = (h.get('content') or '')
-                    sig = t[:200].lower()
-                    vec_map[sig] = max(vec_map.get(sig, 0.0), float(h.get('score') or 0.0))
-                # Candidate set: top BM25 + all vector hits
-                candidate_texts: List[str] = []
-                # Take top K from BM25
-                ranked_bm = sorted(enumerate(bm_scores), key=lambda x: x[1], reverse=True) if bm_scores else []
-                for idx, _s in ranked_bm[: max(getattr(retrieval, 'hybrid_top_k', 10), 10)]:
-                    if 0 <= idx < len(corpus_texts):
-                        candidate_texts.append(corpus_texts[idx])
-                # Add vector hit texts
-                for h in vector_hits_rich:
-                    t = (h.get('content') or '')
-                    if t:
-                        candidate_texts.append(t)
-                # Score fusion
-                wv = getattr(retrieval, 'hybrid_weight_dense', 0.7)
-                wb = getattr(retrieval, 'hybrid_weight_bm25', 0.3)
-                scored: List[tuple[float, str]] = []
-                for t in candidate_texts:
-                    sig = t[:200].lower()
-                    s_vec = vec_map.get(sig, 0.0)
-                    # Find bm25 score from corpus if present
-                    s_bm = 0.0
-                    # Use first matching index in corpus_texts
-                    # (Exact content match is sufficient in practice for recent corpora)
-                    try:
-                        idx = corpus_texts.index(t)
-                        s_bm = bm_scores[idx] if idx < len(bm_scores) else 0.0
-                    except ValueError:
-                        s_bm = 0.0
-                    scored.append((wv * s_vec + wb * s_bm, t))
-                scored.sort(key=lambda x: x[0], reverse=True)
-                # Dedup and cap
-                seen = set(); ordered: List[str] = []
-                cap = getattr(retrieval, 'rerank_input_cap', 30)
-                for sc, t in scored:
-                    sig = t[:200].lower()
-                    if sig in seen:
+                    if not t:
                         continue
-                    seen.add(sig)
-                    ordered.append(t)
-                    if len(ordered) >= cap:
-                        break
+                    sig = t[:200].lower()
+                    cid = sig_to_id.get(sig)
+                    if cid:
+                        vec_accum[cid] = max(vec_accum.get(cid, 0.0), float(h.get('score') or 0.0))
+                    else:
+                        unmapped_texts.append(t)
+                max_vec = max(vec_accum.values()) if vec_accum else 1.0
+                vector_results: List[Dict[str, Any]] = [
+                    {"id": cid, "score": (sc / max(1e-9, max_vec))} for cid, sc in vec_accum.items()
+                ]
+                # Advanced weighted fusion by ID
+                wv = getattr(retrieval, 'hybrid_weight_dense', 0.6)
+                wb = getattr(retrieval, 'hybrid_weight_bm25', 0.4)
+                doc_scores: Dict[str, float] = {}
+                for r in bm25_results:
+                    doc_scores[r["id"]] = wb * float(r["score"])
+                for r in vector_results:
+                    doc_scores[r["id"]] = doc_scores.get(r["id"], 0.0) + wv * float(r["score"])
+                ranked_ids = [doc_id for doc_id, _ in sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)]
+                # Build contexts by ID, then enrich with any unmapped vector texts and stitched contexts
+                ordered: List[str] = []
+                cap = getattr(retrieval, 'rerank_input_cap', 30)
+                for cid in ranked_ids:
+                    if cid in id_to_content:
+                        ordered.append(id_to_content[cid])
+                        if len(ordered) >= cap:
+                            break
+                # Append some unmapped vector texts if room remains
+                if len(ordered) < cap and unmapped_texts:
+                    for t in unmapped_texts:
+                        if len(ordered) >= cap:
+                            break
+                        sig = t[:200].lower()
+                        if any(sig == s[:200].lower() for s in ordered):
+                            continue
+                        ordered.append(t)
                 contexts = ordered
             except Exception:
                 contexts = []
