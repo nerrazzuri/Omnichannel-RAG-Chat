@@ -162,7 +162,7 @@ class RAGService:
         api_key = os.getenv("OPENAI_API_KEY")
         self.openai_client = OpenAI(api_key=api_key) if api_key else None
         # Default models and parameters aligned with samples
-        self.chat_model = os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini")
+        self.chat_model = os.getenv("RAG_CHAT_MODEL", "gpt-5-mini")
         self.chat_temperature = float(os.getenv("RAG_CHAT_TEMPERATURE", "0.3"))
         # Strict prompt to keep answers grounded
         self.prompt_template = (
@@ -567,16 +567,55 @@ class RAGService:
         if not self.openai_client:
             return None
         try:
+            model = os.getenv("RAG_EMBED_MODEL", getattr(retrieval, 'embedding_model', "text-embedding-3-large"))
             resp = self.openai_client.embeddings.create(
-                model=os.getenv("RAG_EMBED_MODEL", "text-embedding-3-small"),
+                model=model,
                 input=[text],
             )
             return resp.data[0].embedding
         except Exception:
             return None
 
-    def _qdrant_contexts(self, query: str, tenant_id: str, top_k: int = 6) -> list[str]:
-        emb = self._embed_query(query)
+    def _embed_with_cache(self, text: str) -> Optional[list[float]]:
+        model = os.getenv("RAG_EMBED_MODEL", getattr(retrieval, 'embedding_model', 'text-embedding-3-large'))
+        key = f"emb:{model}:{hash(text)}"
+        cached = redis_cache.get_tenant_key("global", key)
+        if isinstance(cached, list):
+            return cached
+        emb = self._embed_query(text)
+        if emb:
+            redis_cache.set_tenant_key("global", key, emb, ttl=3600)
+        return emb
+
+    def _embed_queries_avg(self, base_query: str, max_variants: int = 3) -> Optional[list[float]]:
+        queries = [base_query]
+        if getattr(retrieval, 'expansion_enabled', True):
+            try:
+                variants = self.expand_queries(base_query)[:max_variants]
+                queries.extend(variants)
+            except Exception:
+                pass
+        embs: List[List[float]] = []
+        for q in queries:
+            e = self._embed_with_cache(q)
+            if e:
+                embs.append(e)
+        if not embs:
+            return None
+        dim = len(embs[0])
+        avg = [0.0] * dim
+        for v in embs:
+            if len(v) != dim:
+                continue
+            for i in range(dim):
+                avg[i] += v[i]
+        n = max(1, len(embs))
+        for i in range(dim):
+            avg[i] /= n
+        return avg
+
+    def _qdrant_contexts(self, query: str, tenant_id: str, top_k: int = 6, emb_override: Optional[list[float]] = None) -> list[str]:
+        emb = emb_override if emb_override is not None else self._embed_query(query)
         if not emb:
             return []
         try:
@@ -591,9 +630,29 @@ class RAGService:
         except Exception:
             return []
 
-    def _qdrant_contexts_rich(self, query: str, tenant_id: str, top_k: int = 6) -> List[Dict[str, Any]]:
-        emb = self._embed_query(query)
+    def _qdrant_contexts_rich(self, query: str, tenant_id: str, top_k: int = 6, emb_override: Optional[list[float]] = None) -> List[Dict[str, Any]]:
+        emb = emb_override if emb_override is not None else self._embed_query(query)
         if not emb:
+            return []
+        try:
+            results = qdrant_service.search_similar_chunks(query_embedding=emb, tenant_id=tenant_id, top_k=top_k)
+            rich: List[Dict[str, Any]] = []
+            for r in results:
+                payload = r.get("payload") or {}
+                content = payload.get("content")
+                if isinstance(content, str) and content:
+                    rich.append({
+                        "content": content,
+                        "document_id": payload.get("document_id"),
+                        "document_title": payload.get("document_title"),
+                        "chunk_index": payload.get("chunk_index"),
+                        "chapter_num": payload.get("chapter_num"),
+                        "chapter_title": payload.get("chapter_title"),
+                        "page": payload.get("page"),
+                        "score": r.get("score"),
+                    })
+            return rich
+        except Exception:
             return []
 
     # Public web fallback via Wikipedia API (no API key required)
@@ -731,7 +790,8 @@ class RAGService:
         contexts = preselected_contexts if preselected_contexts is not None else self.retriever.retrieve(query, top_k=retrieval.hybrid_top_k)
         # Augment with vector search (Qdrant) when embeddings are available
         try:
-            vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k)
+            emb_avg = self._embed_queries_avg(query)
+            vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
         except Exception:
             vector_hits_rich = []
         # Stitch adjacent chunks for vector results
@@ -763,18 +823,55 @@ class RAGService:
         else:
             vector_hits = []
 
-        if vector_hits or stitched_texts:
-            combined = contexts + stitched_texts + vector_hits
-            # Deduplicate while preserving order
-            seen = set()
-            dedup: list[str] = []
-            for c in combined:
-                k = c[:200].lower()
+        # Hybrid fusion: combine BM25 and vector scores when enabled
+        if getattr(retrieval, 'hybrid_enabled', True):
+            candidates = contexts + stitched_texts + vector_hits
+            # BM25 normalize
+            bm25_scores: List[float] = []
+            if candidates:
+                bm = BM25Lite(candidates)
+                bm25_scores = bm.score(query)
+                if bm25_scores:
+                    m = max(bm25_scores) or 1.0
+                    bm25_scores = [s / m for s in bm25_scores]
+            # Vector score map from rich hits
+            vec_map: Dict[str, float] = {}
+            for h in vector_hits_rich:
+                t = (h.get("content") or "")
+                s = float(h.get("score") or 0.0)
+                vec_map[t] = max(vec_map.get(t, 0.0), s)
+            # Weighted sum and sort
+            wv = getattr(retrieval, 'hybrid_weight_dense', 0.7)
+            wb = getattr(retrieval, 'hybrid_weight_bm25', 0.3)
+            scored: List[tuple[float, str]] = []
+            for i, t in enumerate(candidates):
+                s_bm = bm25_scores[i] if i < len(bm25_scores) else 0.0
+                s_vec = vec_map.get(t, 0.0)
+                scored.append((wv * s_vec + wb * s_bm, t))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            # Dedup and cap
+            seen = set(); ordered: List[str] = []
+            cap = getattr(retrieval, 'rerank_input_cap', 30)
+            for sc, t in scored:
+                k = t[:200].lower()
                 if k in seen:
                     continue
                 seen.add(k)
-                dedup.append(c)
-            contexts = dedup[:20]
+                ordered.append(t)
+                if len(ordered) >= cap:
+                    break
+            contexts = ordered
+        else:
+            if vector_hits or stitched_texts:
+                combined = contexts + stitched_texts + vector_hits
+                seen = set(); dedup: list[str] = []
+                for c in combined:
+                    k = c[:200].lower()
+                    if k in seen:
+                        continue
+                    seen.add(k)
+                    dedup.append(c)
+                contexts = dedup[:20]
         # If policy-like question, extract precise sentences as a shortcut answer
         ql = query.lower()
         def split_sentences(text: str) -> List[str]:

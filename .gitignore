@@ -8,6 +8,7 @@ node_modules/
 
 # Next.js
 /.next/
+/frontend/.next/
 /out/
 
 # Production

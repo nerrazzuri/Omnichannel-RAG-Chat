@@ -50,6 +50,15 @@ class RetrievalConfig:
     expand_variants: int = _get_int("RETR_EXPAND_VARIANTS", 4)
     # Enable/disable rule-based handlers (prefer AI-only when false)
     rules_enabled: bool = os.getenv("RETR_RULES_ENABLED", "false").lower() in ("1", "true", "yes")
+    # Hybrid retrieval and weights
+    hybrid_enabled: bool = os.getenv("RETR_HYBRID_ENABLED", "true").lower() in ("1", "true", "yes")
+    expansion_enabled: bool = os.getenv("RETR_EXPANSION_ENABLED", "true").lower() in ("1", "true", "yes")
+    hybrid_weight_vector: float = _get_float("RETR_HYBRID_WEIGHT_VECTOR", 0.7)
+    hybrid_weight_bm25: float = _get_float("RETR_HYBRID_WEIGHT_BM25", 0.3)
+    # Embedding and fine-tuning controls
+    embedding_model: str = os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large")
+    fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")
+    fine_tune_model_path: str = os.getenv("EMBED_FINE_TUNE_MODEL_PATH", "")
 
 
 # Singleton-style accessors

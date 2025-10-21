@@ -107,7 +107,7 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
 
     # Build tenant-specific corpus with associated columns metadata when available
     rows = (
-        db.query(KnowledgeChunk.content, KnowledgeChunk.embedding, Document.meta)
+        db.query(KnowledgeChunk.content, KnowledgeChunk.embedding, Document.meta, KnowledgeChunk.meta)
         .join(Document, KnowledgeChunk.document_id == Document.id)
         .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
         .filter(KnowledgeBase.tenant_id == tenant_uuid)
@@ -115,14 +115,22 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         .limit(2000)
         .all()
     )
-    corpus = [content for (content, _emb, _meta) in rows]
-    row_embeddings = [emb for (_content, emb, _meta) in rows]
+    corpus = [content for (content, _emb, _doc_meta, _kc_meta) in rows]
+    row_embeddings = [emb for (_content, emb, _doc_meta, _kc_meta) in rows]
     corpus_columns = []
-    for (_content, _emb, meta) in rows:
+    chunk_row_meta = []
+    for (_content, _emb, doc_meta, kc_meta) in rows:
         cols = None
-        if isinstance(meta, dict) and 'columns' in meta and isinstance(meta['columns'], list):
-            cols = [norm_col(str(c)) for c in meta['columns']]
+        if isinstance(doc_meta, dict) and 'columns' in doc_meta and isinstance(doc_meta['columns'], list):
+            cols = [norm_col(str(c)) for c in doc_meta['columns']]
         corpus_columns.append(cols)
+        row_map = None
+        if isinstance(kc_meta, dict) and isinstance(kc_meta.get('row'), dict):
+            try:
+                row_map = {norm_col(str(k)): ('' if kc_meta['row'][k] is None else str(kc_meta['row'][k])) for k in kc_meta['row'].keys()}
+            except Exception:
+                row_map = None
+        chunk_row_meta.append(row_map)
 
     # Index and retrieve candidates if we have corpus; otherwise allow backend public fallback
     if corpus:
@@ -388,14 +396,24 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             person_name_raw = person_name_raw.strip().strip('?')
             person_names = name_variants(person_name_raw)
 
-        # First pass: find exact name matches
+        # First pass: find exact name matches (prefer structured metadata.row; fallback to parsing text row)
         matching_rows = []
         for i, cand in enumerate(corpus):
-            cols = corpus_columns[i]
-            if not cols:
-                continue
-            values = parse_csv_row(cand)
-            col_to_val = {cols[j]: values[j] if j < len(values) else '' for j in range(len(cols))}
+            col_to_val = {}
+            row_map_meta = chunk_row_meta[i]
+            if isinstance(row_map_meta, dict) and row_map_meta:
+                col_to_val = row_map_meta
+            else:
+                # Fallback: parse "Record N:" mini-doc into key:value map
+                try:
+                    lines = [l.strip() for l in cand.splitlines() if l.strip()]
+                    for line in lines[1:]:  # skip first line 'Record N:'
+                        if ':' in line:
+                            k, v = line.split(':', 1)
+                            k2 = norm_col(k)
+                            col_to_val[k2] = v.strip()
+                except Exception:
+                    col_to_val = {}
             
             # Determine row name
             name_cols = ['employee_name', 'name', 'employee', 'empname', 'full_name', 'employee_full_name']
@@ -417,7 +435,7 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             if not is_match:
                 # Fallback: check if any cell contains the exact name
                 person_norms = {norm_name(v) for v in person_names}
-                for v in values:
+                for v in col_to_val.values():
                     if norm_name(str(v)) in person_norms:
                         is_match = True
                         break

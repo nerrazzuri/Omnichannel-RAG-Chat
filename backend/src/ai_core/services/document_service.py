@@ -307,7 +307,7 @@ class DocumentService:
                     t_tokens = estimate_tokens(t)
                     if batch and tokens_in_batch + t_tokens > MAX_TOKENS_PER_REQUEST:
                         resp = self.client.embeddings.create(
-                            model="text-embedding-3-small",
+                            model=os.getenv("RAG_EMBED_MODEL", "gpt-5-mini"),
                             input=batch,
                         )
                         embeddings.extend([d.embedding for d in resp.data])
@@ -318,7 +318,7 @@ class DocumentService:
 
                 if batch:
                     resp = self.client.embeddings.create(
-                        model="text-embedding-3-small",
+                        model=os.getenv("RAG_EMBED_MODEL", "gpt-5-mini"),
                         input=batch,
                     )
                     embeddings.extend([d.embedding for d in resp.data])
@@ -622,19 +622,26 @@ class DocumentService:
                     ignore_cols.add(c)
             except Exception:
                 continue
-        # Build per-row docs
+        # Build per-row docs and include key-value map in metadata
         for idx, row in df.iterrows():
             parts: List[str] = [f"Record {idx}:"]
+            row_map: Dict[str, Any] = {}
             for c in df.columns:
                 if c in ignore_cols:
                     continue
                 val = row.get(c)
                 if pd.isna(val) or (isinstance(val, str) and not val.strip()):
                     continue
+                # Include in semantic text
                 parts.append(f"{c}: {val}")
+                # Always include in structured metadata map (even if numeric) for precise retrieval later
+                try:
+                    row_map[str(c)] = ("" if pd.isna(val) else str(val))
+                except Exception:
+                    row_map[str(c)] = str(val)
             text = "\n".join(parts)
             if text.strip() and len(parts) > 1:
-                meta = {"source_file": filename, "row_index": int(idx)}
+                meta = {"source_file": filename, "row_index": int(idx), "row": row_map}
                 if sheet_name:
                     meta["sheet"] = sheet_name
                 docs.append((text, meta))
