@@ -1195,7 +1195,7 @@ class RAGService:
         expanded_terms: List[str] = []
         # nearest schema fields
         try:
-            nearest = self._nearest_schema_fields(query, tenant_id, top_k=8)
+            nearest = self._nearest_schema_fields(query, tenant_id, top_k=max(5, getattr(retrieval, 'schema_expansion_top_k', 3)))
             # Normalize scores via softmax-like scaling from raw distances if available
             scored: List[Tuple[str, float]] = []
             if nearest:
@@ -1213,13 +1213,19 @@ class RAGService:
                 maxs = max(s for (_n, s) in scored) if scored else 1.0
                 exps = [ _m.exp((s - maxs)) for (_n, s) in scored ]
                 ssum = sum(exps) or 1.0
-                weights = {n: (e/ssum) for (e, (n, _s)) in zip(exps, scored)}
-                # keep top with threshold
-                for n, w in sorted(weights.items(), key=lambda x: x[1], reverse=True):
-                    if w < 0.05:
+                weights_items = [(n, (e/ssum)) for (e, (n, _s)) in zip(exps, scored)]
+                weights_items.sort(key=lambda x: x[1], reverse=True)
+                top_k = max(1, int(getattr(retrieval, 'schema_expansion_top_k', 3)))
+                min_w = float(getattr(retrieval, 'schema_expansion_min_weight', 0.08))
+                kept = 0
+                for n, w in weights_items:
+                    if kept >= top_k:
+                        break
+                    if w < min_w:
                         continue
                     if n not in expanded_terms:
                         expanded_terms.append(n)
+                        kept += 1
             else:
                 for f in nearest:
                     if isinstance(f, str) and f and f not in expanded_terms:
@@ -1239,6 +1245,7 @@ class RAGService:
                 SynonymsStore.put_many(tenant_id, {t: t for t in expanded_terms})
         except Exception:
             pass
+        # Truncate BM25 hint by char length using config when building later
         return {"expanded_terms": expanded_terms, "variants": variants}
 
     def _nearest_schema_fields(self, query: str, tenant_id: str, top_k: int = 8) -> List[str]:
@@ -1488,7 +1495,11 @@ class RAGService:
                 pass
 
         # Build enriched BM25 query with schema hints
-        bm25_hint = " ".join([t for t in expansion_terms[:8]])
+        # Limit hint by top_k and max chars from config
+        top_k_terms = expansion_terms[: max(1, int(getattr(retrieval, 'schema_expansion_top_k', 3)))]
+        bm25_hint_raw = " ".join([t for t in top_k_terms])
+        max_chars = max(40, int(getattr(retrieval, 'schema_expansion_hint_max_chars', 120)))
+        bm25_hint = bm25_hint_raw[:max_chars]
         bm25_query = (query + (" " + bm25_hint if bm25_hint else "")).strip()
 
         # Prepare candidates (retrieval + stitching + entity consolidation)

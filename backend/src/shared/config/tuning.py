@@ -59,6 +59,10 @@ class RetrievalConfig:
     expansion_enabled: bool = os.getenv("RETR_EXPANSION_ENABLED", "true").lower() in ("1", "true", "yes")
     hybrid_weight_vector: float = _get_float("RETR_HYBRID_WEIGHT_VECTOR", 0.7)
     hybrid_weight_bm25: float = _get_float("RETR_HYBRID_WEIGHT_BM25", 0.3)
+    # Schema expansion normalization/capping
+    schema_expansion_top_k: int = _get_int("RETR_SCHEMA_EXP_TOP_K", 3)
+    schema_expansion_min_weight: float = _get_float("RETR_SCHEMA_EXP_MIN_W", 0.08)
+    schema_expansion_hint_max_chars: int = _get_int("RETR_SCHEMA_EXP_HINT_MAX_CHARS", 120)
     # Enable/disable individual retrievers
     hybrid_use_bm25: bool = os.getenv("RETR_USE_BM25", "true").lower() in ("1", "true", "yes")
     hybrid_use_dense: bool = os.getenv("RETR_USE_DENSE", "true").lower() in ("1", "true", "yes")
