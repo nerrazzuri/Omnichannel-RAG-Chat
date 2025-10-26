@@ -1015,20 +1015,31 @@ class RAGService:
         return avg
 
     def _get_schema_fields_for_tenant(self, tenant_id: str) -> List[str]:
+        # 1) Redis cache
         try:
-            # Use DB KnowledgeBase + Document meta if available for field names
-            from sqlalchemy.orm import Session as _Session
-            if isinstance(getattr(self, 'db', None), _Session):
-                q = (
-                    self.db.query(Document)
-                )
-            # Fallback: try Redis cached schema
             cached = redis_cache.get_tenant_key(tenant_id, "schema:fields")
-            if isinstance(cached, list):
+            if isinstance(cached, list) and cached:
                 return [str(x) for x in cached if isinstance(x, (str,))]
         except Exception:
             pass
-        return []
+        fields: List[str] = []
+        # 2) Qdrant schema collection as fallback
+        try:
+            items = qdrant_service.list_schema_fields(tenant_id, limit=2000)
+            for it in items:
+                pl = it.get('payload') or {}
+                nm = pl.get('field_name')
+                if isinstance(nm, str) and nm and nm not in fields:
+                    fields.append(nm)
+        except Exception:
+            pass
+        # 3) Persist to Redis for next time
+        try:
+            if fields:
+                redis_cache.set_tenant_key(tenant_id, "schema:fields", fields, ttl=24*3600)
+        except Exception:
+            pass
+        return fields
 
     def expand_queries(self, base_query: str, schema_fields: Optional[List[str]] = None, tenant_id: Optional[str] = None) -> List[str]:
         """Generate paraphrases/expansions using LLM with schema awareness with caching.
@@ -1275,6 +1286,14 @@ class RAGService:
         cached = redis_cache.get_tenant_key(tenant_id, cache_key)
         if isinstance(cached, dict) and cached.get("response"):
             return cached
+
+        # Set execution context for helpers
+        try:
+            self.current_tenant_id = tenant_id
+            if db is not None:
+                self.db = db
+        except Exception:
+            pass
 
         # Identity questions
         ql_id = (query or "").strip().lower()
