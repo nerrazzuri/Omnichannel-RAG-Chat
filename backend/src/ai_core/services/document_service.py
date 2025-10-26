@@ -421,6 +421,7 @@ class DocumentService:
                         "chapter_num": merged_meta.get("chapter_num"),
                         "chapter_title": merged_meta.get("chapter_title"),
                         "page": merged_meta.get("page"),
+                        "metadata": merged_meta or {},
                     })
                 except Exception:
                     pass
@@ -675,6 +676,19 @@ class DocumentService:
                 pass
             self.db.add(parent)
             self.db.commit(); self.db.refresh(parent)
+            # Persist schema fields in cache for query expansion
+            try:
+                from shared.cache.redis import redis_cache
+                cols_norm = [str(c).strip() for c in df.columns]
+                existing = redis_cache.get_tenant_key(tenant_id, "schema:fields")
+                merged = []
+                if isinstance(existing, list):
+                    merged = list(dict.fromkeys([*existing, *cols_norm]))
+                else:
+                    merged = cols_norm
+                redis_cache.set_tenant_key(tenant_id, "schema:fields", merged, ttl=24*3600)
+            except Exception:
+                pass
             # Progress update
             if progress_job_id:
                 try:
@@ -730,6 +744,61 @@ class DocumentService:
                             logger.warning(f"Qdrant upsert skipped: {e}")
             except Exception:
                 pass
+
+            # Upsert schema field embeddings (one-time per sheet) into schema collection
+            try:
+                # Build simple descriptions per column
+                col_texts: List[str] = []
+                col_names: List[str] = []
+                for c in list(df.columns):
+                    cname = str(c).strip()
+                    if not cname:
+                        continue
+                    desc = f"Field: {cname}. Meaning: {cname.replace('_', ' ')}."
+                    col_texts.append(desc)
+                    col_names.append(cname)
+                if col_texts:
+                    # Use remote embeddings to match Qdrant 1536 dim
+                    schema_embs = self.embed(col_texts, force_local=False)
+                    # Validate dimensions
+                    ready: List[Dict[str, Any]] = []
+                    for cname, emb in zip(col_names, schema_embs):
+                        if isinstance(emb, list) and len(emb) == 1536:
+                            import uuid as _uuid
+                            # Deterministic ID per tenant+field
+                            fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"))
+                            ready.append({
+                                "id": fid,
+                                "embedding": emb,
+                                "field_name": cname,
+                                "description": f"{cname}"
+                            })
+                    if ready:
+                        # Cleanup: delete stale schema fields no longer present
+                        try:
+                            existing = qdrant_service.list_schema_fields(tenant_id, limit=2000)
+                            existing_names = set()
+                            id_by_name = {}
+                            for p in existing:
+                                pl = p.get('payload') or {}
+                                nm = pl.get('field_name')
+                                if isinstance(nm, str):
+                                    existing_names.add(nm)
+                                    id_by_name[nm] = p.get('id')
+                            current_names = set(col_names)
+                            stale_names = list(existing_names - current_names)
+                            stale_ids = [id_by_name[n] for n in stale_names if n in id_by_name]
+                            if stale_ids:
+                                qdrant_service.delete_schema_fields_by_ids(tenant_id, stale_ids)
+                        except Exception:
+                            pass
+                        try:
+                            qdrant_service.create_collection()
+                        except Exception:
+                            pass
+                        qdrant_service.upsert_schema_fields(tenant_id, ready)
+            except Exception as e:
+                logger.warning(f"Schema embedding upsert skipped: {e}")
         if not first_doc_id:
             raise ValueError("No data parsed from file")
         # Final progress
@@ -818,19 +887,51 @@ class DocumentService:
                 for row in ws.iter_rows(values_only=True):
                     texts.append('\t'.join('' if v is None else str(v) for v in row))
             return '\n'.join(texts)
-        # PDF handled by PyPDF2
+        # PDF handled by PyPDF2 with OCR fallback
         if name.endswith('.pdf'):
-            from PyPDF2 import PdfReader
-            buf = io.BytesIO(data)
-            reader = PdfReader(buf)
-            texts: List[str] = []
-            for i, page in enumerate(reader.pages, start=1):
-                texts.append(f"[[PAGE:{i}]]\n" + (page.extract_text() or ''))
-            return '\n'.join(texts)
-        # Fallback raw decode
+            try:
+                from PyPDF2 import PdfReader
+                buf = io.BytesIO(data)
+                reader = PdfReader(buf)
+                texts: List[str] = []
+                for i, page in enumerate(reader.pages, start=1):
+                    extracted = page.extract_text() or ''
+                    if not extracted.strip():
+                        # OCR fallback via pdfplumber + pytesseract
+                        try:
+                            import pdfplumber
+                            import pytesseract
+                            from PIL import Image
+                            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                                if 0 <= (i-1) < len(pdf.pages):
+                                    p = pdf.pages[i-1]
+                                    im = p.to_image(resolution=200).original
+                                    # Ensure PIL Image
+                                    if not isinstance(im, Image.Image):
+                                        im = Image.fromarray(im)
+                                    ocr_text = pytesseract.image_to_string(im)
+                                    extracted = ocr_text or ''
+                        except Exception:
+                            pass
+                    texts.append(f"[[PAGE:{i}]]\n" + extracted)
+                return '\n'.join(texts)
+            except Exception:
+                pass
+        # Fallback raw decode and OCR for common image formats
         try:
             return data.decode('utf-8')
         except Exception:
+            # Try image OCR if this appears to be an image
+            try:
+                import imghdr
+                kind = imghdr.what(None, h=data)
+                if kind in ('png', 'jpeg', 'jpg', 'bmp', 'tiff'):
+                    from PIL import Image
+                    import pytesseract
+                    img = Image.open(io.BytesIO(data))
+                    return pytesseract.image_to_string(img)
+            except Exception:
+                pass
             return data.decode('latin-1', errors='ignore')
 
     def extract_rows_from_file(self, filename: str, data: bytes) -> List[str]:
@@ -959,6 +1060,7 @@ class DocumentService:
                         "chunk_index": idx,
                         "chapter_num": None,
                         "chapter_title": None,
+                        "metadata": meta_row or {},
                     })
                 except Exception:
                     pass
@@ -982,6 +1084,41 @@ class DocumentService:
                             logging.getLogger(__name__).warning(f"Qdrant upsert skipped: {e}")
                     else:
                         logging.getLogger(__name__).info("Skipping Qdrant upsert due to embedding dimension mismatch")
+            except Exception:
+                pass
+
+            # Upsert schema field embeddings for CSV header if present
+            try:
+                header = (doc.meta or {}).get('columns') if isinstance(doc.meta, dict) else None
+                if isinstance(header, list) and header:
+                    col_texts: List[str] = []
+                    col_names: List[str] = []
+                    for c in header:
+                        cname = str(c).strip()
+                        if not cname:
+                            continue
+                        desc = f"Field: {cname}. Meaning: {cname.replace('_', ' ')}."
+                        col_texts.append(desc)
+                        col_names.append(cname)
+                    if col_texts:
+                        schema_embs = self.embed(col_texts, force_local=False)
+                        ready: List[Dict[str, Any]] = []
+                        for cname, emb in zip(col_names, schema_embs):
+                            if isinstance(emb, list) and len(emb) == 1536:
+                                import uuid as _uuid
+                                fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"))
+                                ready.append({
+                                    "id": fid,
+                                    "embedding": emb,
+                                    "field_name": cname,
+                                    "description": f"{cname}"
+                                })
+                        if ready:
+                            try:
+                                qdrant_service.create_collection()
+                            except Exception:
+                                pass
+                            qdrant_service.upsert_schema_fields(tenant_id, ready)
             except Exception:
                 pass
 

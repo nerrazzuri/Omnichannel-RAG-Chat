@@ -4,6 +4,7 @@ Qdrant vector database service for document embeddings and similarity search.
 from typing import List, Dict, Any, Optional, Tuple
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+import os
 import numpy as np
 import logging
 import time
@@ -20,6 +21,7 @@ class QdrantService:
         qdrant_api_key = api_key or settings.qdrant_api_key
         self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.collection_name = "knowledge_chunks"
+        self.schema_collection = "schema_fields"
 
     def _with_retries(self, func, *args, **kwargs):
         attempts = int(os.getenv("QDRANT_RETRIES", "10"))
@@ -82,9 +84,43 @@ class QdrantService:
             # Degrade gracefully; caller may retry later
             logger.warning(f"Failed to create Qdrant collection (will retry later): {e}")
 
+        # Ensure schema collection exists as well
+        try:
+            collections = self._with_retries(self.client.get_collections)
+            collection_names = [col.name for col in collections.collections]
+            if self.schema_collection not in collection_names:
+                self._with_retries(
+                    self.client.create_collection,
+                    collection_name=self.schema_collection,
+                    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+                )
+                logger.info(f"Created Qdrant collection: {self.schema_collection}")
+                # Payload index for tenant filtering
+                self._with_retries(
+                    self.client.create_payload_index,
+                    collection_name=self.schema_collection,
+                    field_name="tenant_id",
+                    field_schema="keyword"
+                )
+                # Field name index for filtering/searching
+                try:
+                    self._with_retries(
+                        self.client.create_payload_index,
+                        collection_name=self.schema_collection,
+                        field_name="field_name",
+                        field_schema="keyword"
+                    )
+                except Exception:
+                    pass
+            else:
+                logger.info(f"Collection {self.schema_collection} already exists")
+        except Exception as e:
+            logger.warning(f"Failed to create schema collection (will retry later): {e}")
+
     def upsert_knowledge_chunks(self, tenant_id: str, chunks: List[Dict[str, Any]]) -> None:
         """Upsert knowledge chunks for a specific tenant."""
         try:
+            collection_name = self.collection_name
             points = []
             for chunk in chunks:
                 point = PointStruct(
@@ -109,7 +145,7 @@ class QdrantService:
             if points:
                 self._with_retries(
                     self.client.upsert,
-                    collection_name=self.collection_name,
+                    collection_name=collection_name,
                     points=points
                 )
                 logger.info(f"Upserted {len(points)} knowledge chunks for tenant {tenant_id}")
@@ -117,6 +153,116 @@ class QdrantService:
         except Exception as e:
             # Degrade gracefully; embeddings remain available in SQL, upsert can be retried later
             logger.warning(f"Failed to upsert knowledge chunks for tenant {tenant_id} (will retry later): {e}")
+
+    def upsert_schema_fields(self, tenant_id: str, fields: List[Dict[str, Any]]) -> None:
+        """Upsert schema field embeddings for a tenant.
+
+        Each item in fields should have: {"id": str, "embedding": List[float], "field_name": str, "description": str}
+        """
+        try:
+            points = []
+            for f in fields:
+                point = PointStruct(
+                    id=f["id"],
+                    vector=f["embedding"],
+                    payload={
+                        "tenant_id": tenant_id,
+                        "field_name": f.get("field_name"),
+                        "description": f.get("description", ""),
+                        "kind": "schema",
+                    }
+                )
+                points.append(point)
+            if points:
+                self._with_retries(
+                    self.client.upsert,
+                    collection_name=self.schema_collection,
+                    points=points
+                )
+                logger.info(f"Upserted {len(points)} schema fields for tenant {tenant_id}")
+        except Exception as e:
+            logger.warning(f"Failed to upsert schema fields for tenant {tenant_id}: {e}")
+
+    def search_schema_fields(
+        self,
+        query_embedding: List[float],
+        tenant_id: str,
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Search schema fields by embedding for a tenant."""
+        try:
+            filter_condition = Filter(
+                must=[
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                ]
+            )
+            search_results = self._with_retries(
+                self.client.search,
+                collection_name=self.schema_collection,
+                query_vector=query_embedding,
+                query_filter=filter_condition,
+                limit=top_k,
+            )
+            results = []
+            for r in search_results:
+                results.append({
+                    "id": r.id,
+                    "score": r.score,
+                    "payload": r.payload,
+                })
+            return results
+        except Exception as e:
+            logger.warning(f"Failed to search schema fields for tenant {tenant_id}: {e}")
+            return []
+
+    def list_schema_fields(self, tenant_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
+        """List schema field points for a tenant."""
+        try:
+            collected: List[Dict[str, Any]] = []
+            next_page = None
+            fetched = 0
+            while fetched < limit:
+                response = self._with_retries(
+                    self.client.scroll,
+                    collection_name=self.schema_collection,
+                    scroll_filter=Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]),
+                    with_payload=True,
+                    with_vectors=False,
+                    limit=min(256, limit - fetched),
+                    offset=next_page
+                )
+                if not response or not response[0]:
+                    break
+                points, next_page = response
+                for p in points:
+                    collected.append({
+                        "id": p.id,
+                        "payload": p.payload or {},
+                    })
+                fetched += len(points)
+                if not next_page:
+                    break
+            return collected
+        except Exception as e:
+            logger.warning(f"list_schema_fields failed: {e}")
+            return []
+
+    def delete_schema_fields_by_ids(self, tenant_id: str, ids: List[Any]) -> bool:
+        """Delete schema field points by IDs for a tenant."""
+        if not ids:
+            return True
+        try:
+            from qdrant_client.models import HasIdCondition
+            self._with_retries(
+                self.client.delete,
+                collection_name=self.schema_collection,
+                points_selector=HasIdCondition(has_id=ids)
+            )
+            logger.info(f"Deleted {len(ids)} schema fields for tenant {tenant_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"delete_schema_fields_by_ids failed: {e}")
+            return False
 
     def search_similar_chunks(
         self,
@@ -138,9 +284,10 @@ class QdrantService:
             )
 
             # Search with filter
+            collection_name = self.collection_name
             search_results = self._with_retries(
                 self.client.search,
-                collection_name=self.collection_name,
+                collection_name=collection_name,
                 query_vector=query_embedding,
                 query_filter=filter_condition,
                 limit=top_k,
@@ -175,9 +322,10 @@ class QdrantService:
                 ]
             )
 
+            collection_name = self.collection_name
             self._with_retries(
                 self.client.delete,
-                collection_name=self.collection_name,
+                collection_name=collection_name,
                 points_selector=filter_condition
             )
 
@@ -207,9 +355,10 @@ class QdrantService:
         Note: Qdrant doesn't support range by chunk_index directly; we scroll and filter in client for simplicity.
         """
         try:
+            collection_name = self.collection_name
             res = self._with_retries(
                 self.client.scroll,
-                collection_name=self.collection_name,
+                collection_name=collection_name,
                 scroll_filter=Filter(must=[
                     FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
                     FieldCondition(key="document_id", match=MatchValue(value=document_id)),

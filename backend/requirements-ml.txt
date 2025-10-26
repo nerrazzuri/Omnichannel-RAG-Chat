@@ -1,0 +1,2 @@
+sentence-transformers>=2.2.2
+# torch is installed from the CPU wheel index in Dockerfile for better reliability

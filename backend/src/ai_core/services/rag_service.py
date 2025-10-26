@@ -8,7 +8,7 @@ import logging
 import time
 import difflib
 from datetime import datetime
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter as ColCounter
 import math
 import re
 import os
@@ -24,14 +24,14 @@ from shared.config.tuning import retrieval
 from shared.database.models import Document as DbDocument, KnowledgeChunk as DbChunk, KnowledgeBase as DbKB
 from .reranker_service import get_reranker, RerankingResult
 from shared.config.tuning import reranker_config
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter as PromCounter, Histogram
 
 logger = logging.getLogger(__name__)
  
 # 添加监控指标
-RERANK_REQUESTS = Counter('rag_rerank_requests_total', 'Total reranking requests')
+RERANK_REQUESTS = PromCounter('rag_rerank_requests_total', 'Total reranking requests')
 RERANK_LATENCY = Histogram('rag_rerank_latency_seconds', 'Reranking latency')
-RERANK_ERRORS = Counter('rag_rerank_errors_total', 'Reranking errors')
+RERANK_ERRORS = PromCounter('rag_rerank_errors_total', 'Reranking errors')
 
 class StandardBM25:
     def __init__(self, corpus: List[str], k1: float = 1.5, b: float = 0.75):
@@ -40,7 +40,7 @@ class StandardBM25:
         self.corpus = corpus
         self.doc_count = len(corpus)
         self.doc_len: List[int] = []
-        self.doc_freqs: List[Counter] = []
+        self.doc_freqs: List[ColCounter] = []
         self.vocab: List[str] = []
         self.idf: Dict[str, float] = {}
         self.avgdl = (sum(len(doc.split()) for doc in corpus) / self.doc_count) if self.doc_count else 0.0
@@ -51,7 +51,7 @@ class StandardBM25:
         for doc in self.corpus:
             words = doc.lower().split()
             self.doc_len.append(len(words))
-            cnt = Counter(words)
+            cnt = ColCounter(words)
             self.doc_freqs.append(cnt)
             vocab_set.update(cnt.keys())
         self.vocab = list(vocab_set)
@@ -118,7 +118,18 @@ class HybridRetriever:
         ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
         return [i for i, _ in ranked[:top_k]]
 
+    def dense_search(self, query: str, top_k: int = 5) -> List[int]:
+        """Temporary dense search fallback.
+
+        Uses keyword_search rankings to avoid errors when a true vector search
+        implementation is unavailable in this context.
+        """
+        return self.keyword_search(query, top_k=top_k)
+
     def rrf_fuse(self, lists: List[List[int]], k: int = 60, top_k: int = 5) -> List[int]:
+        """Deprecated: Use RAGService._fuse_candidates for a single fusion policy.
+        Kept for backwards compatibility in simple retrieval-only paths.
+        """
         ranks: Dict[int, float] = defaultdict(float)
         for idx_list in lists:
             for rank, doc_id in enumerate(idx_list, start=1):
@@ -173,23 +184,26 @@ class RAGService:
         self.chat_model = os.getenv("RAG_CHAT_MODEL", "gpt-5-mini")
         self.chat_temperature = float(os.getenv("RAG_CHAT_TEMPERATURE", "0.3"))
         self.reranker = get_reranker()
-        self.reranker_enabled = True  # 可以通过配置控制
-        
-        logger.info(f"RAGService initialized with reranker: {self.reranker.get_model_info()}")
+        self.reranker_enabled = reranker_config.enabled
         # Strict prompt to keep answers grounded
         self.prompt_template = (
-            "You are a professional corporate assistant with access to internal company documents. Your name is Omni.\n\n"
-            "Use the information from the CONTEXT below to answer the QUESTION as accurately and helpfully as possible.\n"
+            "You are a professional corporate assistant. Your name is Omni.\n\n"
+            "You receive CONTEXT that has already been interpreted into natural language.\n"
+            "Answer the QUESTION concisely in human language. Do NOT quote raw field labels or key:value pairs.\n"
+            "Prefer short, direct answers (yes/no, a single date/number, or 1-2 sentences) unless more detail is clearly required.\n\n"
             "If the context truly lacks the relevant information, reply exactly with: \n"
             "\"I don’t have that information in the current database.\"\n\n"
-            "Always include short source citations at the end.\n\n"
+            "Examples:\n"
+            "- If marital status is married, answer: 'Yes, <Name> is married.'\n"
+            "- If the hire date is 2015-06-01, answer: 'June 1, 2015.'\n"
+            "- If salary is $90,000, answer: '$90,000.'\n\n"
+            "Always include brief source citations at the end.\n\n"
             "---\nCONTEXT:\n{context}\n---\nQUESTION:\n{question}\n---\nAnswer:"
         )
         self.no_info_text = "I don’t have that information in the current database."
+        # Ensure state reflects config
         self.reranker = get_reranker()
-        self.reranker_enabled = reranker_config.cache_enabled
-        
-        logger.info(f"RAGService initialized with reranker: {self.reranker.get_model_info()}")
+        self.reranker_enabled = reranker_config.enabled
 
     def load_documents(self, docs: List[str]) -> None:
         self.retriever.index(docs)
@@ -237,33 +251,112 @@ class RAGService:
         except Exception:
             return default_plan
 
-    def expand_queries(self, query: str) -> List[str]:
-        """Use the LLM to generate a small set of reformulations to broaden retrieval."""
-        expansions: List[str] = []
-        if not self.openai_client:
-            return expansions
-        try:
-            prompt = (
-                "Rewrite the user's question into 3 to 5 alternative phrasings that preserve the meaning, one per line.\n"
-                "Focus on synonyms, explicit topic names, and removing pronouns.\n"
-                f"USER QUESTION: {query}"
-            )
-            completion = self.openai_client.chat.completions.create(
-                model=os.getenv("RAG_EXPAND_MODEL", self.chat_model),
-                temperature=0.3,
-                messages=[
-                    {"role": "system", "content": "You generate alternative search queries only."},
-                    {"role": "user", "content": prompt},
-                ],
-            )
-            text = (completion.choices[0].message.content or "").strip()
-            for line in text.splitlines():
-                s = line.strip("- *\t ")
-                if s and s.lower() != query.lower() and s not in expansions:
-                    expansions.append(s)
-            return expansions[:5]
-        except Exception:
+    # Unified fusion policy: configurable RRF with weights
+    def _fuse_candidates(self, bm25_texts: List[str], dense_hits_rich: List[Dict[str, Any]], query: str) -> List[str]:
+        # Build candidate list
+        candidates = bm25_texts[:]
+        vec_map: Dict[str, float] = {}
+        for h in (dense_hits_rich or []):
+            t = (h.get('content') or '')
+            if not t:
+                continue
+            vec_map[t] = max(vec_map.get(t, 0.0), float(h.get('score') or 0.0))
+            if t not in candidates:
+                candidates.append(t)
+        if not candidates:
             return []
+        # BM25 ranks
+        bm = StandardBM25(candidates)
+        bm_scores = bm.score(query)
+        ranked_bm = sorted([(s, i) for i, s in enumerate(bm_scores)], key=lambda x: x[0], reverse=True)
+        bm25_ranking: Dict[str, int] = {}
+        for rnk, (_s, idx) in enumerate(ranked_bm):
+            bm25_ranking[candidates[idx]] = rnk
+        # Dense ranks
+        dense_ranking: Dict[str, int] = {}
+        if vec_map:
+            sorted_dense = sorted(vec_map.items(), key=lambda x: x[1], reverse=True)
+            for rnk, (t, _sc) in enumerate(sorted_dense):
+                dense_ranking[t] = rnk
+        # RRF with weights from config
+        k_rrf = getattr(retrieval, 'rrf_k', 60)
+        w_bm = getattr(retrieval, 'rrf_w_bm25', 0.4)
+        w_vec = getattr(retrieval, 'rrf_w_dense', 0.6)
+        scores: Dict[str, float] = {}
+        for t in candidates:
+            r_bm = bm25_ranking.get(t)
+            r_vec = dense_ranking.get(t)
+            s = 0.0
+            if r_bm is not None:
+                s += w_bm * (1.0 / (k_rrf + r_bm))
+            if r_vec is not None:
+                s += w_vec * (1.0 / (k_rrf + r_vec))
+            scores[t] = s
+        ordered = [t for t, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
+        return ordered
+
+    def _classify_intent(self, query: str) -> str:
+        """Lightweight intent classification for answer routing.
+        Returns one of: 'yes_no', 'temporal', 'causal', 'descriptive'.
+        """
+        q = (query or "").strip().lower()
+        # Temporal cues
+        temporal_cues = ["when", "what date", "date of", "birth date", "hired", "joined", "start date", "dob", "birthday"]
+        if any(c in q for c in temporal_cues):
+            return "temporal"
+        # Causal cues
+        if q.startswith("why ") or " why " in q or " reason" in q or " because " in q or " due to " in q:
+            return "causal"
+        # Yes/No cues
+        yesno_starts = ("is ", "are ", "was ", "were ", "does ", "do ", "did ", "has ", "have ", "can ", "could ", "should ")
+        if q.startswith(yesno_starts):
+            return "yes_no"
+        # Descriptive default
+        return "descriptive"
+
+    def _normalize_text(self, text: str) -> str:
+        """Lightweight normalization: lowercase, strip punctuation, collapse spaces, synonym canonicalization."""
+        try:
+            import re
+            t = (text or "").lower()
+            # Replace punctuation with spaces
+            t = re.sub(r"[\p{P}\p{S}]", " ", t)
+        except Exception:
+            # Fallback regex class for punctuation if \p classes unsupported
+            import re
+            t = (text or "").lower()
+            t = re.sub(r"[^a-z0-9\s]", " ", t)
+        # Collapse whitespace
+        t = " ".join(t.split())
+        # Canonicalize common domain variants
+        synonyms = {
+            "dob": {"birthdate", "date_of_birth", "birthday"},
+            "salary": {"pay", "compensation", "wage", "base_salary", "base pay"},
+            "manager": {"supervisor", "boss", "reporting manager"},
+            "department": {"dept", "division", "team", "unit"},
+            "married": {"marital", "marriage"},
+        }
+        tokens = t.split()
+        for i, tok in enumerate(tokens):
+            for canon, alts in synonyms.items():
+                if tok in alts:
+                    tokens[i] = canon
+        return " ".join(tokens)
+
+    def _format_labeled_row(self, row_map: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        for k, v in row_map.items():
+            try:
+                ks = str(k).strip()
+                vs = str(v).strip()
+            except Exception:
+                continue
+            if not ks or not vs:
+                continue
+            parts.append(f"{ks}: {vs}")
+        return " | ".join(parts) if parts else ""
+
+    
 
     def rerank_contexts_via_llm(self, query: str, contexts: List[str], top_k: int = 10) -> List[str]:
         """Ask LLM to score context snippets by relevance and return top_k. Best-effort."""
@@ -583,7 +676,7 @@ class RAGService:
         if not self.openai_client:
             return None
         try:
-            model = os.getenv("RAG_EMBED_MODEL", getattr(retrieval, 'embedding_model', "text-embedding-3-large"))
+            model = self._select_openai_embed_model()
             resp = self.openai_client.embeddings.create(
                 model=model,
                 input=[text],
@@ -593,7 +686,7 @@ class RAGService:
             return None
 
     def _embed_with_cache(self, text: str) -> Optional[list[float]]:
-        model = os.getenv("RAG_EMBED_MODEL", getattr(retrieval, 'embedding_model', 'text-embedding-3-large'))
+        model = self._select_openai_embed_model()
         key = f"emb:{model}:{hash(text)}"
         cached = redis_cache.get_tenant_key("global", key)
         if isinstance(cached, list):
@@ -603,17 +696,36 @@ class RAGService:
             redis_cache.set_tenant_key("global", key, emb, ttl=3600)
         return emb
 
+    def _select_openai_embed_model(self) -> str:
+        """Return a valid OpenAI embedding model ID, never a HF ID.
+
+        Falls back to text-embedding-3-small (1536-d) to match current Qdrant dim.
+        """
+        candidate = os.getenv("OPENAI_EMBED_MODEL") or os.getenv("RAG_EMBED_MODEL") or getattr(retrieval, 'embedding_model', 'text-embedding-3-small')
+        # Heuristic: HF model IDs contain '/'
+        if "/" in str(candidate):
+            return "text-embedding-3-small"
+        # Guard against chat models being set here
+        if str(candidate).startswith("gpt-"):
+            return "text-embedding-3-small"
+        return str(candidate or "text-embedding-3-small")
+
     def _embed_queries_avg(self, base_query: str, max_variants: int = 3) -> Optional[list[float]]:
         queries = [base_query]
         if getattr(retrieval, 'expansion_enabled', True):
             try:
-                variants = self.expand_queries(base_query)[:max_variants]
+                # Schema-aware expansion: include known schema fields
+                tenant = getattr(self, 'current_tenant_id', 'global') or 'global'
+                schema_fields = self._get_schema_fields_for_tenant(tenant)
+                variants = self.expand_queries(base_query, schema_fields=schema_fields)[:max_variants]
                 queries.extend(variants)
             except Exception:
                 pass
+        # Normalize before embedding
         embs: List[List[float]] = []
         for q in queries:
-            e = self._embed_with_cache(q)
+            qn = self._normalize_text(q)
+            e = self._embed_with_cache(qn)
             if e:
                 embs.append(e)
         if not embs:
@@ -629,6 +741,101 @@ class RAGService:
         for i in range(dim):
             avg[i] /= n
         return avg
+
+    def _get_schema_fields_for_tenant(self, tenant_id: str) -> List[str]:
+        try:
+            # Use DB KnowledgeBase + Document meta if available for field names
+            from sqlalchemy.orm import Session as _Session
+            if isinstance(getattr(self, 'db', None), _Session):
+                q = (
+                    self.db.query(Document)
+                )
+            # Fallback: try Redis cached schema
+            cached = redis_cache.get_tenant_key(tenant_id, "schema:fields")
+            if isinstance(cached, list):
+                return [str(x) for x in cached if isinstance(x, (str,))]
+        except Exception:
+            pass
+        return []
+
+    def expand_queries(self, base_query: str, schema_fields: Optional[List[str]] = None, tenant_id: Optional[str] = None) -> List[str]:
+        """Generate paraphrases/expansions using LLM with schema awareness with caching.
+
+        Returns up to 3-5 short alternative queries that include relevant field names.
+        """
+        # Cache check
+        try:
+            t = tenant_id or getattr(self, 'current_tenant_id', 'global') or 'global'
+            cache_key = f"expand:{t}:{hash(base_query)}"
+            cached = redis_cache.get_tenant_key(t, cache_key)
+            if isinstance(cached, list) and cached:
+                return [str(x) for x in cached][:5]
+        except Exception:
+            pass
+
+        expansions: List[str] = []
+        # Merge provided fields with nearest schema fields from Qdrant
+        try:
+            t = tenant_id or getattr(self, 'current_tenant_id', 'global') or 'global'
+            nearest = self._nearest_schema_fields(base_query, t, top_k=8)
+        except Exception:
+            nearest = []
+        merged_fields = []
+        for f in (schema_fields or []) + nearest:
+            if isinstance(f, str) and f and f not in merged_fields:
+                merged_fields.append(f)
+        fields_snippet = ", ".join(merged_fields[:20]) if merged_fields else ""
+        prompt = (
+            "Given the user query, generate 3 alternative phrasings using any applicable field names "
+            "from this schema list (if relevant). Return one per line, concise.\n\n"
+            f"Schema fields: {fields_snippet}\n\n"
+            f"Query: {base_query}"
+        )
+        if self.openai_client:
+            try:
+                completion = self.openai_client.chat.completions.create(
+                    model=self.chat_model,
+                    temperature=0.2,
+                    messages=[
+                        {"role": "system", "content": "You produce short alternate queries, one per line."},
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                raw = (completion.choices[0].message.content or "").strip()
+                for line in raw.splitlines():
+                    s = line.strip(" -\t\n")
+                    if s and s.lower() != base_query.lower():
+                        expansions.append(s)
+            except Exception:
+                pass
+        # Fallback heuristic expansions
+        if not expansions and merged_fields:
+            for f in merged_fields[:3]:
+                expansions.append(f"{base_query} {f}")
+        expansions = expansions[:5]
+        # Cache set
+        try:
+            ttl = getattr(retrieval, 'expand_cache_ttl', 1800)
+            redis_cache.set_tenant_key(t, cache_key, expansions, ttl=ttl)
+        except Exception:
+            pass
+        return expansions
+
+    def _nearest_schema_fields(self, query: str, tenant_id: str, top_k: int = 8) -> List[str]:
+        emb = self._embed_with_cache(query)
+        if not emb:
+            return []
+        try:
+            results = qdrant_service.search_schema_fields(query_embedding=emb, tenant_id=tenant_id, top_k=top_k)
+        except Exception:
+            return []
+        fields: List[str] = []
+        for r in results:
+            payload = r.get('payload') or {}
+            name = payload.get('field_name')
+            if isinstance(name, str) and name and name not in fields:
+                fields.append(name)
+        return fields
 
     def _qdrant_contexts(self, query: str, tenant_id: str, top_k: int = 6, emb_override: Optional[list[float]] = None) -> list[str]:
         emb = emb_override if emb_override is not None else self._embed_query(query)
@@ -666,6 +873,7 @@ class RAGService:
                         "chapter_title": payload.get("chapter_title"),
                         "page": payload.get("page"),
                         "score": r.get("score"),
+                        "meta": payload.get("metadata", {}),
                     })
             return rich
         except Exception:
@@ -828,6 +1036,7 @@ class RAGService:
                 )
                 tenant_pairs = q.limit(2000).all()
                 id_to_content: Dict[str, str] = {}
+                content_to_row: Dict[str, Dict[str, str]] = {}
                 corpus_texts: List[str] = []
                 idx_to_id: List[str] = []
                 sig_to_id: Dict[str, str] = {}
@@ -839,6 +1048,14 @@ class RAGService:
                         idx_to_id.append(kid)
                         corpus_texts.append(c)
                         sig_to_id[c[:200].lower()] = kid
+                        try:
+                            meta = getattr(kc, 'meta', {}) or {}
+                            rowm = meta.get('row') if isinstance(meta, dict) else None
+                            if isinstance(rowm, dict) and rowm:
+                                # Normalize to str->str
+                                content_to_row[c] = {str(k): str(v) for k, v in rowm.items() if v is not None}
+                        except Exception:
+                            pass
                 bm25 = StandardBM25(corpus_texts)
                 bm_scores = bm25.score(query)
                 # Normalize BM25
@@ -864,23 +1081,12 @@ class RAGService:
                 vector_results: List[Dict[str, Any]] = [
                     {"id": cid, "score": (sc / max(1e-9, max_vec))} for cid, sc in vec_accum.items()
                 ]
-                # Advanced weighted fusion by ID
-                wv = getattr(retrieval, 'hybrid_weight_dense', 0.6)
-                wb = getattr(retrieval, 'hybrid_weight_bm25', 0.4)
-                doc_scores: Dict[str, float] = {}
-                for r in bm25_results:
-                    doc_scores[r["id"]] = wb * float(r["score"])
-                for r in vector_results:
-                    doc_scores[r["id"]] = doc_scores.get(r["id"], 0.0) + wv * float(r["score"])
-                ranked_ids = [doc_id for doc_id, _ in sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)]
-                # Build contexts by ID, then enrich with any unmapped vector texts and stitched contexts
-                ordered: List[str] = []
+                # Use unified fusion policy to get ordered contexts
+                bm25_texts = [id_to_content.get(idx_to_id[i], '') for i, _ in enumerate(bm_scores) if 0 <= i < len(idx_to_id) and id_to_content.get(idx_to_id[i])]
+                ordered = self._fuse_candidates(bm25_texts, vector_hits_rich, query)
+                # Build contexts by ID order, then enrich with any unmapped vector texts and stitched contexts
                 cap = getattr(retrieval, 'rerank_input_cap', 30)
-                for cid in ranked_ids:
-                    if cid in id_to_content:
-                        ordered.append(id_to_content[cid])
-                        if len(ordered) >= cap:
-                            break
+                ordered = ordered[:cap]
                 # Append some unmapped vector texts if room remains
                 if len(ordered) < cap and unmapped_texts:
                     for t in unmapped_texts:
@@ -930,36 +1136,103 @@ class RAGService:
         else:
             vector_hits = []
 
-        # Hybrid fusion: combine BM25 and vector scores when enabled
+        # Entity consolidation: merge contexts that reference the same entity (e.g., name)
+        try:
+            def _entity_key_from_meta(meta: Dict[str, Any]) -> str:
+                if not isinstance(meta, dict):
+                    return ""
+                row = meta.get('row') if isinstance(meta.get('row'), dict) else None
+                if not row:
+                    return ""
+                # Try common name keys; fallback to concatenation of first two non-empty fields
+                candidates = [
+                    'employee_name', 'name', 'full_name', 'employee', 'person',
+                    'first_name', 'last_name'
+                ]
+                # normalize keys
+                row_norm = {str(k).strip().lower().replace(' ', '_'): str(v).strip() for k, v in row.items() if str(v).strip()}
+                for ck in candidates:
+                    if ck in row_norm and row_norm[ck]:
+                        return row_norm[ck].lower()
+                # Fallback: join first two fields
+                vals = list(row_norm.values())
+                if vals:
+                    return (vals[0] + (" " + vals[1] if len(vals) > 1 else "")).lower()
+                return ""
+
+            # Build mapping entity -> list of contexts
+            entity_to_contexts: Dict[str, List[str]] = {}
+            if vector_hits_rich:
+                for h in vector_hits_rich:
+                    txt = (h.get('content') or '').strip()
+                    meta = h.get('meta') or {}
+                    ek = _entity_key_from_meta(meta)
+                    if ek and txt:
+                        entity_to_contexts.setdefault(ek, []).append(txt)
+            # Consolidate only when multiple contexts per entity
+            if entity_to_contexts:
+                consolidated: List[str] = []
+                used = set()
+                for ek, clist in entity_to_contexts.items():
+                    if len(clist) > 1:
+                        # Merge unique entries for this entity
+                        seen_local = set()
+                        merged_parts = []
+                        for c in clist:
+                            if c.lower() in seen_local:
+                                continue
+                            seen_local.add(c.lower())
+                            merged_parts.append(c)
+                            used.add(c)
+                        consolidated.append("\n".join(merged_parts))
+                # Append remaining contexts that weren't merged
+                for c in contexts:
+                    if (c or '').strip() and c not in used:
+                        consolidated.append(c)
+                # Replace contexts with consolidated set
+                contexts = consolidated
+        except Exception:
+            pass
+
+        # Hybrid fusion: use Reciprocal Rank Fusion (RRF) to combine BM25 and dense
         if getattr(retrieval, 'hybrid_enabled', True):
             candidates = contexts + stitched_texts + vector_hits
-            # BM25 normalize
-            bm25_scores: List[float] = []
-            if candidates:
-                bm = StandardBM25(candidates)
-                bm25_scores = bm.score(query)
-                if bm25_scores:
-                    m = max(bm25_scores) or 1.0
-                    bm25_scores = [s / m for s in bm25_scores]
-            # Vector score map from rich hits
-            vec_map: Dict[str, float] = {}
-            for h in vector_hits_rich:
-                t = (h.get("content") or "")
-                s = float(h.get("score") or 0.0)
-                vec_map[t] = max(vec_map.get(t, 0.0), s)
-            # Weighted sum and sort
-            wv = getattr(retrieval, 'hybrid_weight_dense', 0.7)
-            wb = getattr(retrieval, 'hybrid_weight_bm25', 0.3)
-            scored: List[tuple[float, str]] = []
-            for i, t in enumerate(candidates):
-                s_bm = bm25_scores[i] if i < len(bm25_scores) else 0.0
-                s_vec = vec_map.get(t, 0.0)
-                scored.append((wv * s_vec + wb * s_bm, t))
-            scored.sort(key=lambda x: x[0], reverse=True)
+            # Compute BM25 ranking
+            bm25_ranking: Dict[str, int] = {}
+            if candidates and getattr(retrieval, 'hybrid_use_bm25', True):
+                bm = StandardBM25([self._normalize_text(c) for c in candidates])
+                bm_scores = bm.score(self._normalize_text(query))
+                ranked_bm = sorted([(s, i) for i, s in enumerate(bm_scores)], key=lambda x: x[0], reverse=True)
+                for rnk, (_s, idx) in enumerate(ranked_bm):
+                    if 0 <= idx < len(candidates):
+                        bm25_ranking[candidates[idx]] = rnk
+            # Compute dense ranking from vector hits
+            dense_ranking: Dict[str, int] = {}
+            if vector_hits_rich and getattr(retrieval, 'hybrid_use_dense', True):
+                sorted_dense = sorted(vector_hits_rich, key=lambda h: float(h.get('score') or 0.0), reverse=True)
+                for rnk, h in enumerate(sorted_dense):
+                    t = (h.get('content') or "")
+                    if t and t not in dense_ranking:
+                        dense_ranking[t] = rnk
+            # RRF fusion with configurable k and weights
+            k_rrf = getattr(retrieval, 'rrf_k', 60)
+            w_bm = getattr(retrieval, 'rrf_w_bm25', 0.4)
+            w_vec = getattr(retrieval, 'rrf_w_dense', 0.6)
+            scores: Dict[str, float] = {}
+            for t in candidates:
+                r_bm = bm25_ranking.get(t)
+                r_vec = dense_ranking.get(t)
+                s = 0.0
+                if r_bm is not None:
+                    s += w_bm * (1.0 / (k_rrf + r_bm))
+                if r_vec is not None:
+                    s += w_vec * (1.0 / (k_rrf + r_vec))
+                scores[t] = s
+            ordered_pairs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
             # Dedup and cap
             seen = set(); ordered: List[str] = []
             cap = getattr(retrieval, 'rerank_input_cap', 30)
-            for sc, t in scored:
+            for t, _sc in ordered_pairs:
                 k = t[:200].lower()
                 if k in seen:
                     continue
@@ -990,16 +1263,42 @@ class RAGService:
                 # Get BiEncoder scores
                 bi_encoder_scores = self._get_bi_encoder_scores(query, contexts, vector_hits_rich)
                 
+                # Prepare structured contexts for CrossEncoder when available
+                structured_contexts: List[str] = []
+                label_map: Dict[str, str] = {}
+                # From vector hits metadata
+                for h in (vector_hits_rich or []):
+                    txt = (h.get('content') or '').strip()
+                    meta = h.get('meta') or {}
+                    row_map = meta.get('row') if isinstance(meta, dict) else None
+                    if txt and isinstance(row_map, dict) and row_map:
+                        label_map[txt] = self._format_labeled_row(row_map)
+                # From corpus DB snapshot (content_to_row)
+                try:
+                    for txt, row_map in (content_to_row.items() if 'content_to_row' in locals() else []):
+                        if txt and txt not in label_map and isinstance(row_map, dict) and row_map:
+                            label_map[txt] = self._format_labeled_row(row_map)
+                except Exception:
+                    pass
+                # Build final structured list
+                for c in contexts:
+                    structured_contexts.append(label_map.get(c, c))
+
                 # Execute reranking
                 rerank_result = self.reranker.multi_stage_reranking(
                     query=query,
-                    documents=contexts,
+                    documents=structured_contexts,
                     bi_encoder_scores=bi_encoder_scores,
-                    top_k=min(retrieval.rerank_top_k, len(contexts))
+                    top_k=min(retrieval.rerank_top_k, len(structured_contexts))
                 )
                 
-                # Update contexts with reranked results
-                contexts = rerank_result.documents
+                # Update contexts with reranked results (map back to original when labeled)
+                # Map back to original content when labeled
+                if label_map:
+                    back_map: Dict[str, str] = {v: k for k, v in label_map.items()}
+                    contexts = [back_map.get(d, d) for d in rerank_result.documents]
+                else:
+                    contexts = rerank_result.documents
                 
                 processing_time = time.time() - start_time
                 RERANK_LATENCY.observe(processing_time)
@@ -1411,30 +1710,192 @@ class RAGService:
                 except Exception:
                     pass
 
-        context_text = "\n\n".join(contexts)
+        # Apply semantic interpreter to contexts before final prompting
+        semantic_applied = False
+        try:
+            from .semantic_interpreter import SemanticContextInterpreter
+            # Build per-tenant synonyms dictionary from schema_fields (dynamic)
+            from shared.cache.synonyms_store import SynonymsStore
+            persisted = SynonymsStore.get_all(tenant_id)
+            synonyms_map = dict(persisted)
+            for f in (fields_for_filter or []):
+                base = str(f).strip().lower().replace("_", " ")
+                if not base:
+                    continue
+                # map canonical to itself
+                if base not in synonyms_map:
+                    synonyms_map[base] = base
+            interpreter = SemanticContextInterpreter(synonyms_map=synonyms_map)
+            # Determine relevant schema fields for this query
+            try:
+                nearest_fields = self._nearest_schema_fields(query, tenant_id, top_k=8)
+            except Exception:
+                nearest_fields = []
+            tenant_fields = self._get_schema_fields_for_tenant(tenant_id)
+            fields_for_filter = nearest_fields or tenant_fields
+            interpreted = interpreter.interpret(query, contexts, fields_for_filter, synonyms_map=synonyms_map)
+            if interpreted and any(s.strip() for s in interpreted):
+                # Deduplicate and compress interpreted paragraphs
+                intent_local = self._classify_intent(query)
+                unique: List[str] = []
+                seen = set()
+                for para in interpreted:
+                    p = (para or "").strip()
+                    if not p:
+                        continue
+                    if p.lower() in seen:
+                        continue
+                    seen.add(p.lower())
+                    # Compress by keeping first 1-2 sentences depending on intent
+                    parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+", p) if x.strip()]
+                    if intent_local in ("yes_no", "temporal"):
+                        p_comp = parts[0] if parts else p
+                    else:
+                        p_comp = " ".join(parts[:2]) if parts else p
+                    unique.append(p_comp)
+                    # Keep only top few interpreted facts to reduce token waste
+                    if len(unique) >= min(12, getattr(retrieval, 'rerank_top_k', 12)):
+                        break
+                # Second pass: sentence-level relevance selection
+                try:
+                    all_sents: List[str] = []
+                    for para in unique:
+                        all_sents.extend([x.strip() for x in re.split(r"(?<=[.!?])\s+", para) if x.strip()])
+                    # Deduplicate sentences case-insensitively
+                    seen_sent = set(); sents_dedup: List[str] = []
+                    for s in all_sents:
+                        sl = s.lower()
+                        if sl in seen_sent:
+                            continue
+                        seen_sent.add(sl)
+                        sents_dedup.append(s)
+                    # Score sentences with BM25 against normalized query
+                    if sents_dedup:
+                        bm_scorer = StandardBM25([self._normalize_text(s) for s in sents_dedup])
+                        s_scores = bm_scorer.score(self._normalize_text(query))
+                        ranked = sorted([(sc, s) for sc, s in zip(s_scores, sents_dedup)], key=lambda x: x[0], reverse=True)
+                        # Keep top sentences constrained by intent/token budget
+                        if intent_local in ("yes_no", "temporal"):
+                            keep_n = 4
+                        elif intent_local == "causal":
+                            keep_n = 8
+                        else:
+                            keep_n = min(20, getattr(retrieval, 'rerank_top_k', 12) * 2)
+                        best_sents = [s for _sc, s in ranked[:keep_n]]
+                        # Re-assemble into compact paragraphs (chunks of 2-3)
+                        compact: List[str] = []
+                        buf: List[str] = []
+                        for s in best_sents:
+                            buf.append(s)
+                            if len(buf) >= 3:
+                                compact.append(" ".join(buf))
+                                buf = []
+                        if buf:
+                            compact.append(" ".join(buf))
+                        unique = compact or unique
+                except Exception:
+                    pass
+                context_text = "\n\n".join(unique)
+                # Persist any newly observed alias→canonical mappings discovered by interpreter normalization
+                try:
+                    # Persist alias→canonical learned this run
+                    learned = interpreter.get_learned_mappings()
+                    if learned:
+                        SynonymsStore.put_many(tenant_id, learned)
+                except Exception:
+                    pass
+                semantic_applied = True
+                try:
+                    logger.info(f"semantic_interpreter applied: kept={len(unique)} intent={intent_local}")
+                except Exception:
+                    pass
+            else:
+                context_text = "\n\n".join(contexts)
+                try:
+                    logger.info("semantic_interpreter fallback: empty interpretation; using raw contexts")
+                except Exception:
+                    pass
+        except Exception:
+            context_text = "\n\n".join(contexts)
+            try:
+                logger.info("semantic_interpreter exception; using raw contexts")
+            except Exception:
+                pass
+
+        # Confidence scoring: CrossEncoder preferred; cosine fallback
+        def _estimate_confidence(query_text: str, ctxs: List[str]) -> float:
+            try:
+                if hasattr(self, 'reranker') and getattr(self.reranker, 'cross_encoder_available', False):
+                    pairs = [(query_text, c) for c in ctxs[: min(12, len(ctxs))]]
+                    scores = self.reranker.cross_encoder.predict(pairs, show_progress_bar=False)
+                    return float(max(0.0, min(1.0, sum(scores) / max(1, len(scores)))))
+                qemb = self._embed_with_cache(query_text)
+                if not qemb:
+                    return 0.0
+                import math
+                def cos(a, b):
+                    dot = sum(x*y for x, y in zip(a, b))
+                    na = math.sqrt(sum(x*x for x in a)); nb = math.sqrt(sum(y*y for y in b))
+                    if na == 0 or nb == 0:
+                        return 0.0
+                    return dot / (na * nb)
+                vals = []
+                for c in ctxs[: min(12, len(ctxs))]:
+                    emb = self._embed_with_cache(c)
+                    if emb:
+                        vals.append(cos(qemb, emb))
+                return float(max(0.0, min(1.0, sum(vals) / max(1, len(vals))))) if vals else 0.0
+            except Exception:
+                return 0.0
+
+        interpreted_list = context_text.split("\n\n") if context_text else []
+        confidence_est = _estimate_confidence(query, interpreted_list) if interpreted_list else 0.0
+        low_conf_threshold = 0.5 if hasattr(self, 'reranker') and getattr(self.reranker, 'cross_encoder_available', False) else 0.3
+        low_confidence = confidence_est < low_conf_threshold
 
         generated_text = None
         if self.openai_client:
             plan_text = json.dumps(plan, ensure_ascii=False)
+            # Adjust temperature/style based on intent
+            intent = self._classify_intent(query)
+            temp = {
+                "yes_no": 0.1,
+                "temporal": 0.2,
+                "causal": 0.5,
+                "descriptive": self.chat_temperature,
+            }.get(intent, self.chat_temperature)
             base_prompt = self.prompt_template.format(context=context_text, question=query)
-            prompt = base_prompt + "\n\nPLANNER_DIRECTIVE (Model-generated plan for how to answer; follow if helpful):\n" + plan_text
+            intent_directive = {
+                "yes_no": "Instruction: Answer strictly yes or no with a short explicit statement (e.g., 'Yes, <Name> is married.') and nothing else.",
+                "temporal": "Instruction: Return only the date in a human-readable format (e.g., 'June 1, 2015.') without extra explanation.",
+                "causal": "Instruction: Provide a brief reason in one sentence.",
+                "descriptive": "Instruction: Provide a 1–2 sentence concise summary; avoid raw field labels.",
+            }.get(intent, "")
+            prompt = base_prompt
+            if intent_directive:
+                prompt += "\n\n" + intent_directive
+            prompt += "\n\nPLANNER_DIRECTIVE (Model-generated plan for how to answer; follow if helpful):\n" + plan_text
             try:
-                completion = self.openai_client.chat.completions.create(
-                    model=self.chat_model,
-                    temperature=self.chat_temperature,
-                    messages=[
-                        {"role": "system", "content": "You answer using only the provided CONTEXT."},
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-                generated_text = (completion.choices[0].message.content or "").strip()
+                if not low_confidence:
+                    completion = self.openai_client.chat.completions.create(
+                        model=self.chat_model,
+                        temperature=temp,
+                        messages=[
+                            {"role": "system", "content": "You answer using only the provided CONTEXT."},
+                            {"role": "user", "content": prompt},
+                        ],
+                    )
+                    generated_text = (completion.choices[0].message.content or "").strip()
             except Exception:
                 # If generation fails, fall back to concise snippet
                 generated_text = None
 
         if not generated_text:
-            # Fallback concise answer mirroring sample formatting
-            generated_text = f"{self.no_info_text}" if not contexts else contexts[0][:300]
+            # Fallback concise answer, guarded by confidence
+            if low_confidence:
+                generated_text = "I don’t have enough information to answer precisely."
+            else:
+                generated_text = f"{self.no_info_text}" if not contexts else contexts[0][:300]
 
         # Build grounded citations using vector hit metadata when available
         citations: List[Dict[str, Any]] = []
@@ -1472,11 +1933,28 @@ class RAGService:
         result = {
             "response": generated_text,
             "citations": citations,
-            "confidence": 0.9 if contexts and generated_text else 0.4,
+            "confidence": float(confidence_est) if interpreted_list else (0.9 if contexts and generated_text else 0.4),
             "requiresHuman": False if contexts else True,
         }
         if reranking_info:
             result["reranking"] = reranking_info
+        # Mark whether semantic interpreter was applied
+        result["context_pipeline"] = "semantic_interpreter_applied" if semantic_applied else "raw_context_fallback"
+        # Semantic health logging
+        try:
+            health = {
+                "tenant_id": tenant_id,
+                "intent": intent,
+                "matched_fields": list(fields_for_filter)[:10] if isinstance(fields_for_filter, list) else [],
+                "semantic_applied": bool(semantic_applied),
+                "confidence": float(confidence_est),
+                "low_confidence": bool(low_confidence),
+                "answer_type": intent,
+            }
+            result["health"] = health
+            logger.info(f"semantic_health: {json.dumps(health, ensure_ascii=False)}")
+        except Exception:
+            pass
         redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
         # If the model responded with the no-info string, try one iterative expansion pass
         if self.no_info_text in (generated_text or ""):
@@ -1583,8 +2061,13 @@ class RAGService:
     def toggle_reranker(self, enabled: bool = None) -> bool:
         """Toggle reranker on/off."""
         if enabled is not None:
-            self.reranker_enabled = enabled
-            logger.info(f"Reranker {'enabled' if enabled else 'disabled'}")
+            self.reranker_enabled = bool(enabled)
+            # Reflect in process env config-like state if needed by other components
+            try:
+                os.environ["RERANK_ENABLED"] = "true" if self.reranker_enabled else "false"
+            except Exception:
+                pass
+            logger.info(f"Reranker {'enabled' if self.reranker_enabled else 'disabled'}")
         return self.reranker_enabled
  
     def get_reranker_status(self) -> Dict[str, Any]:
@@ -1595,7 +2078,8 @@ class RAGService:
             "config": {
                 "ltr_enabled": reranker_config.ltr_enabled,
                 "cache_enabled": reranker_config.cache_enabled,
-                "cross_encoder_model": reranker_config.cross_encoder_model
+                "cross_encoder_model": reranker_config.cross_encoder_model,
+                "enabled_flag": reranker_config.enabled,
             }
         }
  

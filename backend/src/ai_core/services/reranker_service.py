@@ -18,6 +18,15 @@ from contextlib import asynccontextmanager
  
 # ML Libraries
 import os
+# Robust HTTPError import (requests if available, else urllib, else define)
+try:
+    from requests.exceptions import HTTPError  # type: ignore
+except Exception:  # pragma: no cover
+    try:
+        from urllib.error import HTTPError  # type: ignore
+    except Exception:  # pragma: no cover
+        class HTTPError(Exception):
+            pass
  
 # Local imports
 from shared.cache.redis import redis_cache
@@ -143,21 +152,58 @@ class AdvancedReranker:
         self.enable_async = enable_async
         self.cache = RerankerCache(reranker_config.cache_enabled)
         
-        # CrossEncoder setup (lazy import to avoid hard dependency)
-        cross_encoder_model = cross_encoder_model or reranker_config.cross_encoder_model
-        logger.info(f"Loading CrossEncoder: {cross_encoder_model} on {self.device}")
+        # CrossEncoder setup (lazy import with robust fallbacks)
+        requested_model = (cross_encoder_model or reranker_config.cross_encoder_model or "").strip()
+        fallback_models = [
+            requested_model,
+            "cross-encoder/ms-marco-MiniLM-L6-v2",
+            "cross-encoder/ms-marco-electra-base",
+            "cross-encoder/ms-marco-TinyBERT-L-2-v2",
+        ]
+        # de-duplicate while preserving order
+        seen = set()
+        models_to_try = []
+        for m in fallback_models:
+            if m and m not in seen:
+                seen.add(m)
+                models_to_try.append(m)
+
+        self.cross_encoder = None
+        self.cross_encoder_available = False
         try:
             from sentence_transformers import CrossEncoder as _CrossEncoder
-            self.cross_encoder = _CrossEncoder(
-                cross_encoder_model,
-                device=self.device,
-                max_length=reranker_config.cross_encoder_max_length,
-            )
-            self.cross_encoder_available = True
         except Exception as e:
-            logger.error(f"Failed to load CrossEncoder: {e}")
-            self.cross_encoder = None
-            self.cross_encoder_available = False
+            logger.error(f"sentence-transformers import failed: {e}")
+            models_to_try = []  # can't proceed without library
+
+        for model_name in models_to_try:
+            try:
+                #logger.info(f"Loading CrossEncoder: {model_name} on {self.device}")
+                print(f"Loading CrossEncoder: {model_name} on {self.device}")
+                self.cross_encoder = _CrossEncoder(
+                    model_name,
+                    device=self.device,
+                    max_length=reranker_config.cross_encoder_max_length,
+                )
+                self.cross_encoder_available = True
+                #logger.info(f"CrossEncoder loaded: {model_name}")
+                print(f"CrossEncoder loaded: {model_name}")
+                break
+            except (OSError, HTTPError, RuntimeError) as e:
+                import traceback
+                print("Exception Type:", type(e))
+                print("Args:", e.args)
+                traceback.print_exc()
+                logger.warning(f"Model {model_name} could not be loaded: {e}")
+                continue
+            except Exception as e:
+                logger.error(f"Failed to load CrossEncoder '{model_name}': {e}")
+                self.cross_encoder = None
+                self.cross_encoder_available = False
+                import shutil, os
+                cache_path = os.path.expanduser(f"~/.cache/huggingface/hub/models--{model_name.replace('/', '--')}")
+                if os.path.exists(cache_path):
+                    shutil.rmtree(cache_path, ignore_errors=True)
         
         # Learning-to-Rank setup
         self.ltr_model = None

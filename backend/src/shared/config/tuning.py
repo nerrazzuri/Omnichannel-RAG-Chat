@@ -48,6 +48,8 @@ class RetrievalConfig:
     rerank_top_k: int = _get_int("RETR_RERANK_TOP_K", 12)
     # Iterative expansion tries
     expand_variants: int = _get_int("RETR_EXPAND_VARIANTS", 4)
+    # Expansion cache TTL (seconds)
+    expand_cache_ttl: int = _get_int("RETR_EXPAND_CACHE_TTL", 1800)
     # Enable/disable rule-based handlers (prefer AI-only when false)
     rules_enabled: bool = os.getenv("RETR_RULES_ENABLED", "false").lower() in ("1", "true", "yes")
     # Hybrid retrieval and weights
@@ -55,6 +57,15 @@ class RetrievalConfig:
     expansion_enabled: bool = os.getenv("RETR_EXPANSION_ENABLED", "true").lower() in ("1", "true", "yes")
     hybrid_weight_vector: float = _get_float("RETR_HYBRID_WEIGHT_VECTOR", 0.7)
     hybrid_weight_bm25: float = _get_float("RETR_HYBRID_WEIGHT_BM25", 0.3)
+    # Enable/disable individual retrievers
+    hybrid_use_bm25: bool = os.getenv("RETR_USE_BM25", "true").lower() in ("1", "true", "yes")
+    hybrid_use_dense: bool = os.getenv("RETR_USE_DENSE", "true").lower() in ("1", "true", "yes")
+    # Tenant isolation/per-tenant collection
+    per_tenant_collections: bool = os.getenv("RETR_PER_TENANT_COLLECTIONS", "false").lower() in ("1", "true", "yes")
+    # RRF fusion parameters
+    rrf_k: int = _get_int("RETR_RRF_K", 60)
+    rrf_w_bm25: float = _get_float("RETR_RRF_W_BM25", 0.4)
+    rrf_w_dense: float = _get_float("RETR_RRF_W_DENSE", 0.6)
     # Embedding and fine-tuning controls
     embedding_model: str = os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large")
     fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -70,6 +81,9 @@ class RerankerConfig:
     # LTR设置
     ltr_model_path: str = os.getenv("RERANK_LTR_MODEL_PATH", "")
     ltr_enabled: bool = os.getenv("RERANK_LTR_ENABLED", "false").lower() in ("1", "true", "yes")
+    
+    # Enable/disable the reranker pipeline globally
+    enabled: bool = os.getenv("RERANK_ENABLED", "true").lower() in ("1", "true", "yes")
     
     # 融合权重
     fusion_bi_weight: float = _get_float("RERANK_BI_WEIGHT", 0.3)

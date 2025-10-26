@@ -314,6 +314,7 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             'location': ['location', 'office', 'site', 'workplace', 'based in'],
             'recruitment_source': ['recruitment source', 'hiring source', 'recruitmentsource', 'recruit source', 'recruiting source', 'sourcing channel'],
             'last_performance_review_date': ['last performance review date', 'last review date', 'performance review date', 'last appraisal date', 'last evaluation date'],
+            'date_of_birth': ['dob', 'date of birth', 'birthday', 'birth date', 'birthdate', 'dateofbirth'],
         }
         for key, terms in mapping.items():
             if any(t in ql for t in terms):
@@ -340,6 +341,7 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             'location': ['location', 'office', 'site', 'workplace', 'city', 'state'],
             'recruitment_source': ['recruitment_source', 'recruitmentsource', 'hiring_source', 'recruit_source', 'recruiting_source', 'sourcing_channel'],
             'last_performance_review_date': ['last_performance_review_date', 'performance_review_date', 'last_review_date', 'last_appraisal_date', 'last_evaluation_date'],
+            'date_of_birth': ['dob', 'date_of_birth', 'dateofbirth', 'birth_date', 'birthdate'],
         }
         for canon, syns in synonyms.items():
             if any(s in qn for s in syns):
@@ -378,8 +380,34 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         person_context = (pronoun_ref and 'last_person' in convo_ctx) or (candidate and looks_like_person(candidate))
         if not person_context:
             # Not a person-specific query; answer via generic RAG/policy and return
-            preselected_np = candidates[:6] if candidates else []
-            result_np = rag_service.answer(payload.message, preselected_contexts=preselected_np)
+        preselected_np = candidates[:6] if candidates else []
+        # Augment with short-term memory interpreted snippets
+        try:
+            mem_buf = []
+            if isinstance(conversation.context, dict):
+                mb = conversation.context.get("memory_buffer", [])
+                if isinstance(mb, list):
+                    for entry in reversed(mb):
+                        if isinstance(entry, dict):
+                            ints = entry.get("interpreted", [])
+                            if isinstance(ints, list):
+                                for s in ints:
+                                    if isinstance(s, str) and s.strip():
+                                        mem_buf.append(s.strip())
+            # Dedup and cap memory items
+            seen_mem = set(); mem_unique = []
+            for s in mem_buf:
+                sl = s.lower()
+                if sl in seen_mem:
+                    continue
+                seen_mem.add(sl)
+                mem_unique.append(s)
+                if len(mem_unique) >= 6:
+                    break
+            preselected_np = (mem_unique + preselected_np)[:12]
+        except Exception:
+            pass
+        result_np = rag_service.answer(payload.message, preselected_contexts=preselected_np)
             conversation_service.add_message(conversation, sender_type="SYSTEM", content=result_np["response"])
             return QueryResponse(**result_np)
         else:
@@ -543,7 +571,51 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
     # Fallback to generic RAG answer if no structured match
     # Use the previously retrieved candidates and limit to 6 (aligns with sample)
     preselected = candidates[:6] if candidates else []
+    # Augment with short-term memory interpreted snippets
+    try:
+        mem_buf = []
+        if isinstance(conversation.context, dict):
+            mb = conversation.context.get("memory_buffer", [])
+            if isinstance(mb, list):
+                for entry in reversed(mb):
+                    if isinstance(entry, dict):
+                        ints = entry.get("interpreted", [])
+                        if isinstance(ints, list):
+                            for s in ints:
+                                if isinstance(s, str) and s.strip():
+                                    mem_buf.append(s.strip())
+        # Dedup and cap memory items
+        seen_mem = set(); mem_unique = []
+        for s in mem_buf:
+            sl = s.lower()
+            if sl in seen_mem:
+                continue
+            seen_mem.add(sl)
+            mem_unique.append(s)
+            if len(mem_unique) >= 6:
+                break
+        preselected = (mem_unique + preselected)[:12]
+    except Exception:
+        pass
     result = rag_service.answer(payload.message, preselected_contexts=preselected, tenant_id=str(tenant_uuid), db=db)
+    # Persist short-term memory buffer (last 10) with interpreted outputs if available
+    try:
+        mem_key = "memory_buffer"
+        buf = list(conversation.context.get(mem_key, [])) if isinstance(conversation.context, dict) else []
+        entry = {
+            "q": payload.message,
+            "interpreted": result.get("memory_interpreted", [])
+        }
+        buf.append(entry)
+        if len(buf) > 10:
+            buf = buf[-10:]
+        convo_ctx[mem_key] = buf
+        conversation.context = convo_ctx
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+    except Exception:
+        db.rollback()
     conversation_service.add_message(conversation, sender_type="SYSTEM", content=result["response"])
     return QueryResponse(**result)
 
