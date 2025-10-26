@@ -2135,6 +2135,75 @@ class RAGService:
         except Exception:
             pass
         redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
+        # Semantic-only fallback when confidence is low
+        try:
+            if getattr(retrieval, 'semantic_fallback_enabled', True) and (confidence_est < 0.5):
+                # Dense-only retrieval with larger top_k, including field_values
+                topk_mul = max(1, int(getattr(retrieval, 'semantic_fallback_topk_multiplier', 2)))
+                emb_avg2 = self._embed_queries_avg(query)
+                dense_hits2 = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k * topk_mul, emb_override=emb_avg2)
+                fv_hits2 = self._qdrant_field_values_rich(query, tenant_id=tenant_id, top_k=getattr(retrieval, 'field_value_top_k', 8) * topk_mul, emb_override=emb_avg2)
+                # Fuse only dense and field_values (no BM25)
+                dense_texts2 = [h.get('content', '') for h in (dense_hits2 or []) if isinstance(h.get('content'), str)]
+                fv_texts2 = [h.get('content', '') for h in (fv_hits2 or []) if isinstance(h.get('content'), str)]
+                candidates2 = list(dict.fromkeys(dense_texts2 + fv_texts2))
+                # Lightweight rerank
+                contexts2, _info2 = self._apply_advanced_reranking(candidates2, dense_hits2, {}, query, activated_schema_fields=[])
+                # Confidence re-estimate
+                interpreted_list2 = contexts2[: min(12, len(contexts2))]
+                conf2 = 0.0
+                if interpreted_list2:
+                    def _estimate_conf_local(qt: str, ctxs: List[str]) -> float:
+                        try:
+                            if hasattr(self, 'reranker') and getattr(self.reranker, 'cross_encoder_available', False):
+                                pairs = [(qt, c) for c in ctxs]
+                                scores = self.reranker.cross_encoder.predict(pairs, show_progress_bar=False)
+                                import math as _m
+                                return float(max(0.0, min(1.0, sum(scores) / max(1, len(scores)))))
+                            return 0.0
+                        except Exception:
+                            return 0.0
+                    conf2 = _estimate_conf_local(query, interpreted_list2)
+                # Prefer fallback if higher confidence or we have a concrete field_value hit
+                has_fv = bool(fv_hits2)
+                if (conf2 > confidence_est) or has_fv:
+                    # Regenerate succinct answer on improved contexts
+                    ctx_text2 = "\n\n".join(contexts2[: min(12, len(contexts2))])
+                    gen2 = None
+                    if self.openai_client:
+                        try:
+                            base_p2 = self.prompt_template.format(context=ctx_text2, question=query)
+                            completion2 = self.openai_client.chat.completions.create(
+                                model=self.chat_model,
+                                temperature=self.chat_temperature,
+                                messages=[
+                                    {"role": "system", "content": "You answer using only the provided CONTEXT."},
+                                    {"role": "user", "content": base_p2},
+                                ],
+                            )
+                            gen2 = (completion2.choices[0].message.content or '').strip()
+                        except Exception:
+                            gen2 = None
+                    if gen2:
+                        citations2: List[Dict[str, Any]] = []
+                        for i, ctx in enumerate(contexts2[:6]):
+                            citations2.append({
+                                "source": f"chunk_{i}",
+                                "title": f"Context {i+1}",
+                                "relevance": 0.85,
+                                "snippet": ctx[:160],
+                            })
+                        result = {
+                            "response": gen2,
+                            "citations": citations2,
+                            "confidence": float(conf2),
+                            "requiresHuman": False,
+                        }
+                        redis_cache.set_tenant_key(tenant_id, cache_key, result, ttl=self.cache_ttl_seconds)
+                        return result
+        except Exception:
+            pass
+
         # If the model responded with the no-info string, try one iterative expansion pass
         if self.no_info_text in (generated_text or ""):
             expansions = self.expand_queries(query)

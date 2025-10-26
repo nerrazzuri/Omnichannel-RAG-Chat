@@ -69,6 +69,9 @@ class RetrievalConfig:
     rrf_w_bm25: float = _get_float("RETR_RRF_W_BM25", 0.4)
     rrf_w_dense: float = _get_float("RETR_RRF_W_DENSE", 0.5)
     rrf_w_field_values: float = _get_float("RETR_RRF_W_FIELD_VALUES", 0.6)
+    # Semantic-only fallback controls
+    semantic_fallback_enabled: bool = os.getenv("RETR_SEMANTIC_FALLBACK_ENABLED", "true").lower() in ("1", "true", "yes")
+    semantic_fallback_topk_multiplier: int = _get_int("RETR_SEMANTIC_FALLBACK_TOPK_MULT", 2)
     # Embedding and fine-tuning controls
     embedding_model: str = os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large")
     fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")
