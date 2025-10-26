@@ -3,7 +3,7 @@ RAG service with hybrid retrieval (BM25 + dense vectors) and RRF fusion,
 augmented with OpenAI chat generation using a strict prompt to avoid
 hallucinations.
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import logging
 import time
 import difflib
@@ -294,6 +294,278 @@ class RAGService:
             scores[t] = s
         ordered = [t for t, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
         return ordered
+
+    def _prepare_candidates(
+        self,
+        query: str,
+        preselected_contexts: Optional[List[str]],
+        tenant_id: str,
+        db: Optional[Session],
+    ) -> Tuple[List[str], List[Dict[str, Any]], Optional[List[float]], Dict[str, Dict[str, str]], List[str]]:
+        contexts: List[str] = []
+        vector_hits_rich: List[Dict[str, Any]] = []
+        emb_avg: Optional[List[float]] = None
+        content_to_row: Dict[str, Dict[str, str]] = {}
+        stitched_texts: List[str] = []
+
+        if db is not None:
+            try:
+                emb_avg = self._embed_queries_avg(query)
+            except Exception:
+                emb_avg = None
+            try:
+                vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
+            except Exception:
+                vector_hits_rich = []
+            # Build BM25 over tenant chunk corpus with IDs for true fusion
+            try:
+                q = (
+                    db.query(KnowledgeChunk, Document, KnowledgeBase)
+                    .join(Document, KnowledgeChunk.document_id == Document.id)
+                    .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
+                    .filter(KnowledgeBase.tenant_id == tenant_id)
+                )
+                tenant_pairs = q.limit(2000).all()
+                id_to_content: Dict[str, str] = {}
+                content_to_row_local: Dict[str, Dict[str, str]] = {}
+                corpus_texts: List[str] = []
+                idx_to_id: List[str] = []
+                sig_to_id: Dict[str, str] = {}
+                for kc, _doc, _kb in tenant_pairs:
+                    c = getattr(kc, 'content', None)
+                    kid = str(getattr(kc, 'id', ''))
+                    if isinstance(c, str) and c.strip() and kid:
+                        id_to_content[kid] = c
+                        idx_to_id.append(kid)
+                        corpus_texts.append(c)
+                        sig_to_id[c[:200].lower()] = kid
+                        try:
+                            meta = getattr(kc, 'meta', {}) or {}
+                            rowm = meta.get('row') if isinstance(meta, dict) else None
+                            if isinstance(rowm, dict) and rowm:
+                                content_to_row_local[c] = {str(k): str(v) for k, v in rowm.items() if v is not None}
+                        except Exception:
+                            pass
+                bm25 = StandardBM25(corpus_texts)
+                bm_scores = bm25.score(query)
+                # Vector results mapped to chunk IDs
+                vec_accum: Dict[str, float] = {}
+                unmapped_texts: List[str] = []
+                for h in vector_hits_rich:
+                    t = (h.get('content') or '')
+                    if not t:
+                        continue
+                    sig = t[:200].lower()
+                    cid = sig_to_id.get(sig)
+                    if cid:
+                        vec_accum[cid] = max(vec_accum.get(cid, 0.0), float(h.get('score') or 0.0))
+                    else:
+                        unmapped_texts.append(t)
+                # Use unified text-level fusion
+                bm25_texts = [id_to_content.get(idx_to_id[i], '') for i, _ in enumerate(bm_scores) if 0 <= i < len(idx_to_id) and id_to_content.get(idx_to_id[i])]
+                ordered = self._fuse_candidates(bm25_texts, vector_hits_rich, query)
+                cap = getattr(retrieval, 'rerank_input_cap', 30)
+                ordered = ordered[:cap]
+                if len(ordered) < cap and unmapped_texts:
+                    for t in unmapped_texts:
+                        if len(ordered) >= cap:
+                            break
+                        sig = t[:200].lower()
+                        if any(sig == s[:200].lower() for s in ordered):
+                            continue
+                        ordered.append(t)
+                contexts = ordered
+                content_to_row = content_to_row_local
+            except Exception:
+                contexts = []
+
+        if not contexts:
+            contexts = preselected_contexts if preselected_contexts is not None else self.retriever.retrieve(query, top_k=retrieval.hybrid_top_k)
+            try:
+                emb_avg = emb_avg if emb_avg is not None else self._embed_queries_avg(query)
+                vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
+            except Exception:
+                vector_hits_rich = []
+
+        # Stitch adjacent chunks for vector results
+        if vector_hits_rich:
+            for hit in vector_hits_rich:
+                text = hit.get("content") or ""
+                doc_id = hit.get("document_id")
+                idx = hit.get("chunk_index")
+                if isinstance(doc_id, str) and isinstance(idx, int):
+                    try:
+                        neighbors = qdrant_service.get_adjacent_chunks(tenant_id, doc_id, start_index=idx, window=2)
+                    except Exception:
+                        neighbors = []
+                    all_parts = []
+                    prev_parts = [n.get("content", "") for n in neighbors if isinstance(n.get("chunk_index"), int) and n.get("chunk_index") < idx]
+                    prev_parts.sort()
+                    next_parts = [n.get("content", "") for n in neighbors if isinstance(n.get("chunk_index"), int) and n.get("chunk_index") > idx]
+                    next_parts.sort()
+                    all_parts.extend(prev_parts[-2:])
+                    all_parts.append(text)
+                    all_parts.extend(next_parts[:2])
+                    stitched = "\n".join([p for p in all_parts if isinstance(p, str) and p])
+                    if stitched:
+                        stitched_texts.append(stitched)
+
+        # Entity consolidation on contexts using vector metadata
+        try:
+            def _entity_key_from_meta(meta: Dict[str, Any]) -> str:
+                if not isinstance(meta, dict):
+                    return ""
+                row = meta.get('row') if isinstance(meta.get('row'), dict) else None
+                if not row:
+                    return ""
+                candidates = [
+                    'employee_name', 'name', 'full_name', 'employee', 'person',
+                    'first_name', 'last_name'
+                ]
+                row_norm = {str(k).strip().lower().replace(' ', '_'): str(v).strip() for k, v in row.items() if str(v).strip()}
+                for ck in candidates:
+                    if ck in row_norm and row_norm[ck]:
+                        return row_norm[ck].lower()
+                vals = list(row_norm.values())
+                if vals:
+                    return (vals[0] + (" " + vals[1] if len(vals) > 1 else "")).lower()
+                return ""
+
+            entity_to_contexts: Dict[str, List[str]] = {}
+            if vector_hits_rich:
+                for h in vector_hits_rich:
+                    txt = (h.get('content') or '').strip()
+                    meta = h.get('meta') or {}
+                    ek = _entity_key_from_meta(meta)
+                    if ek and txt:
+                        entity_to_contexts.setdefault(ek, []).append(txt)
+            if entity_to_contexts:
+                consolidated: List[str] = []
+                used = set()
+                for ek, clist in entity_to_contexts.items():
+                    if len(clist) > 1:
+                        seen_local = set()
+                        merged_parts = []
+                        for c in clist:
+                            if c.lower() in seen_local:
+                                continue
+                            seen_local.add(c.lower())
+                            merged_parts.append(c)
+                            used.add(c)
+                        consolidated.append("\n".join(merged_parts))
+                for c in contexts:
+                    if (c or '').strip() and c not in used:
+                        consolidated.append(c)
+                contexts = consolidated
+        except Exception:
+            pass
+
+        return contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts
+
+    def _fuse_contexts(
+        self,
+        contexts: List[str],
+        stitched_texts: List[str],
+        vector_hits_rich: List[Dict[str, Any]],
+        query: str,
+    ) -> List[str]:
+        if not getattr(retrieval, 'hybrid_enabled', True):
+            if stitched_texts or vector_hits_rich:
+                combined = contexts + stitched_texts + [h.get('content', '') for h in (vector_hits_rich or []) if isinstance(h.get('content'), str)]
+                seen = set(); dedup: List[str] = []
+                for c in combined:
+                    k = c[:200].lower()
+                    if k in seen:
+                        continue
+                    seen.add(k)
+                    dedup.append(c)
+                return dedup[:20]
+            return contexts
+
+        candidates = contexts + stitched_texts + [h.get('content', '') for h in (vector_hits_rich or []) if isinstance(h.get('content'), str)]
+        bm25_texts = candidates[:]  # we will fuse at text level uniformly
+        ordered = self._fuse_candidates(bm25_texts, vector_hits_rich, query)
+        # Dedup and cap
+        seen = set(); out: List[str] = []
+        cap = getattr(retrieval, 'rerank_input_cap', 30)
+        for t in ordered:
+            k = t[:200].lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(t)
+            if len(out) >= cap:
+                break
+        return out
+
+    def _apply_advanced_reranking(
+        self,
+        contexts: List[str],
+        vector_hits_rich: List[Dict[str, Any]],
+        content_to_row: Dict[str, Dict[str, str]],
+        query: str,
+    ) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+        reranking_info: Optional[Dict[str, Any]] = None
+        if self.reranker_enabled and contexts and len(contexts) > 3:
+            RERANK_REQUESTS.inc()
+            start_time = time.time()
+            try:
+                logger.info(f"Applying reranking to {len(contexts)} contexts")
+                bi_encoder_scores = self._get_bi_encoder_scores(query, contexts, vector_hits_rich)
+                structured_contexts: List[str] = []
+                label_map: Dict[str, str] = {}
+                for h in (vector_hits_rich or []):
+                    txt = (h.get('content') or '').strip()
+                    meta = h.get('meta') or {}
+                    row_map = meta.get('row') if isinstance(meta, dict) else None
+                    if txt and isinstance(row_map, dict) and row_map:
+                        label_map[txt] = self._format_labeled_row(row_map)
+                try:
+                    for txt, row_map in (content_to_row.items() if content_to_row else []):
+                        if txt and txt not in label_map and isinstance(row_map, dict) and row_map:
+                            label_map[txt] = self._format_labeled_row(row_map)
+                except Exception:
+                    pass
+                for c in contexts:
+                    structured_contexts.append(label_map.get(c, c))
+
+                rerank_result = self.reranker.multi_stage_reranking(
+                    query=query,
+                    documents=structured_contexts,
+                    bi_encoder_scores=bi_encoder_scores,
+                    top_k=min(retrieval.rerank_top_k, len(structured_contexts))
+                )
+                if label_map:
+                    back_map: Dict[str, str] = {v: k for k, v in label_map.items()}
+                    contexts = [back_map.get(d, d) for d in rerank_result.documents]
+                else:
+                    contexts = rerank_result.documents
+                processing_time = time.time() - start_time
+                RERANK_LATENCY.observe(processing_time)
+                reranking_info = {
+                    "method": rerank_result.method_used,
+                    "processing_time": processing_time,
+                    "original_count": len(contexts),
+                    "reranked_count": len(rerank_result.documents)
+                }
+                logger.info(f"Reranking completed: method={rerank_result.method_used}, time={processing_time:.3f}s")
+            except Exception as e:
+                RERANK_ERRORS.inc()
+                logger.error(f"Reranking failed: {e}")
+                reranking_info = {"error": str(e), "fallback": True}
+        return contexts, reranking_info
+
+    def _llm_rerank_contexts(self, contexts: List[str], query: str) -> List[str]:
+        if not contexts:
+            return contexts
+        try:
+            return self.rerank_contexts_via_llm(
+                query,
+                contexts,
+                top_k=getattr(retrieval, 'rerank_top_k', 10),
+            )
+        except Exception:
+            return contexts
 
     def _classify_intent(self, query: str) -> str:
         """Lightweight intent classification for answer routing.
@@ -998,335 +1270,32 @@ class RAGService:
             return []
 
     def answer(self, query: str, preselected_contexts: Optional[List[str]] = None, tenant_id: str = "global", db: Optional[Session] = None) -> Dict[str, Any]:
-        # Cache by query text across tenants in a simple way; tenant aware cache keys should be added at call site if needed
+        # Cache
         cache_key = f"rag:answer:{tenant_id}:{hash(query)}"
         cached = redis_cache.get_tenant_key(tenant_id, cache_key)
         if isinstance(cached, dict) and cached.get("response"):
             return cached
 
-        # Identity questions: respond as Omni
+        # Identity questions
         ql_id = (query or "").strip().lower()
         if any(p in ql_id for p in ["what is your name", "what's your name", "who are you", "your name", "what is ur name", "name please", "what are you called"]):
             result_id = {"response": "My name is Omni.", "citations": [], "confidence": 0.99, "requiresHuman": False}
             redis_cache.set_tenant_key(tenant_id, cache_key, result_id, ttl=self.cache_ttl_seconds)
             return result_id
 
-        # Build initial contexts
-        contexts: List[str] = []
-        vector_hits_rich: List[Dict[str, Any]] = []
-        emb_avg = None
+        # Prepare candidates (retrieval + stitching + entity consolidation)
+        contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts = self._prepare_candidates(
+            query, preselected_contexts, tenant_id, db
+        )
 
-        # Prefer true hybrid over the same tenant corpus when DB session is available
-        if db is not None:
-            try:
-                emb_avg = self._embed_queries_avg(query)
-            except Exception:
-                emb_avg = None
-            try:
-                vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
-            except Exception:
-                vector_hits_rich = []
-            # Build BM25 over tenant chunk corpus with IDs for true fusion
-            try:
-                q = (
-                    db.query(KnowledgeChunk, Document, KnowledgeBase)
-                    .join(Document, KnowledgeChunk.document_id == Document.id)
-                    .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
-                    .filter(KnowledgeBase.tenant_id == tenant_id)
-                )
-                tenant_pairs = q.limit(2000).all()
-                id_to_content: Dict[str, str] = {}
-                content_to_row: Dict[str, Dict[str, str]] = {}
-                corpus_texts: List[str] = []
-                idx_to_id: List[str] = []
-                sig_to_id: Dict[str, str] = {}
-                for kc, _doc, _kb in tenant_pairs:
-                    c = getattr(kc, 'content', None)
-                    kid = str(getattr(kc, 'id', ''))
-                    if isinstance(c, str) and c.strip() and kid:
-                        id_to_content[kid] = c
-                        idx_to_id.append(kid)
-                        corpus_texts.append(c)
-                        sig_to_id[c[:200].lower()] = kid
-                        try:
-                            meta = getattr(kc, 'meta', {}) or {}
-                            rowm = meta.get('row') if isinstance(meta, dict) else None
-                            if isinstance(rowm, dict) and rowm:
-                                # Normalize to str->str
-                                content_to_row[c] = {str(k): str(v) for k, v in rowm.items() if v is not None}
-                        except Exception:
-                            pass
-                bm25 = StandardBM25(corpus_texts)
-                bm_scores = bm25.score(query)
-                # Normalize BM25
-                max_bm = max(bm_scores) if bm_scores else 1.0
-                bm25_results: List[Dict[str, Any]] = []
-                for i, s in enumerate(bm_scores):
-                    if 0 <= i < len(idx_to_id):
-                        bm25_results.append({"id": idx_to_id[i], "score": (s / max(1e-9, max_bm))})
-                # Vector results mapped to chunk IDs
-                vec_accum: Dict[str, float] = {}
-                unmapped_texts: List[str] = []
-                for h in vector_hits_rich:
-                    t = (h.get('content') or '')
-                    if not t:
-                        continue
-                    sig = t[:200].lower()
-                    cid = sig_to_id.get(sig)
-                    if cid:
-                        vec_accum[cid] = max(vec_accum.get(cid, 0.0), float(h.get('score') or 0.0))
-                    else:
-                        unmapped_texts.append(t)
-                max_vec = max(vec_accum.values()) if vec_accum else 1.0
-                vector_results: List[Dict[str, Any]] = [
-                    {"id": cid, "score": (sc / max(1e-9, max_vec))} for cid, sc in vec_accum.items()
-                ]
-                # Use unified fusion policy to get ordered contexts
-                bm25_texts = [id_to_content.get(idx_to_id[i], '') for i, _ in enumerate(bm_scores) if 0 <= i < len(idx_to_id) and id_to_content.get(idx_to_id[i])]
-                ordered = self._fuse_candidates(bm25_texts, vector_hits_rich, query)
-                # Build contexts by ID order, then enrich with any unmapped vector texts and stitched contexts
-                cap = getattr(retrieval, 'rerank_input_cap', 30)
-                ordered = ordered[:cap]
-                # Append some unmapped vector texts if room remains
-                if len(ordered) < cap and unmapped_texts:
-                    for t in unmapped_texts:
-                        if len(ordered) >= cap:
-                            break
-                        sig = t[:200].lower()
-                        if any(sig == s[:200].lower() for s in ordered):
-                            continue
-                        ordered.append(t)
-                contexts = ordered
-            except Exception:
-                contexts = []
-        # Fallback to legacy hybrid if no DB
-        if not contexts:
-            contexts = preselected_contexts if preselected_contexts is not None else self.retriever.retrieve(query, top_k=retrieval.hybrid_top_k)
-            try:
-                emb_avg = emb_avg if emb_avg is not None else self._embed_queries_avg(query)
-                vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
-            except Exception:
-                vector_hits_rich = []
-        # Stitch adjacent chunks for vector results
-        stitched_texts: List[str] = []
-        if vector_hits_rich:
-            for hit in vector_hits_rich:
-                text = hit.get("content") or ""
-                doc_id = hit.get("document_id")
-                idx = hit.get("chunk_index")
-                if isinstance(doc_id, str) and isinstance(idx, int):
-                    try:
-                        neighbors = qdrant_service.get_adjacent_chunks(tenant_id, doc_id, start_index=idx, window=2)
-                    except Exception:
-                        neighbors = []
-                    # Assemble neighbors around the hit, ordered by chunk_index
-                    all_parts = []
-                    # include previous neighbors
-                    prev_parts = [n.get("content", "") for n in neighbors if isinstance(n.get("chunk_index"), int) and n.get("chunk_index") < idx]
-                    prev_parts.sort()
-                    next_parts = [n.get("content", "") for n in neighbors if isinstance(n.get("chunk_index"), int) and n.get("chunk_index") > idx]
-                    next_parts.sort()
-                    all_parts.extend(prev_parts[-2:])
-                    all_parts.append(text)
-                    all_parts.extend(next_parts[:2])
-                    stitched = "\n".join([p for p in all_parts if isinstance(p, str) and p])
-                    if stitched:
-                        stitched_texts.append(stitched)
-            vector_hits = [h.get("content", "") for h in vector_hits_rich if isinstance(h.get("content"), str)]
-        else:
-            vector_hits = []
+        # Fuse contexts
+        contexts = self._fuse_contexts(contexts, stitched_texts, vector_hits_rich, query)
 
-        # Entity consolidation: merge contexts that reference the same entity (e.g., name)
-        try:
-            def _entity_key_from_meta(meta: Dict[str, Any]) -> str:
-                if not isinstance(meta, dict):
-                    return ""
-                row = meta.get('row') if isinstance(meta.get('row'), dict) else None
-                if not row:
-                    return ""
-                # Try common name keys; fallback to concatenation of first two non-empty fields
-                candidates = [
-                    'employee_name', 'name', 'full_name', 'employee', 'person',
-                    'first_name', 'last_name'
-                ]
-                # normalize keys
-                row_norm = {str(k).strip().lower().replace(' ', '_'): str(v).strip() for k, v in row.items() if str(v).strip()}
-                for ck in candidates:
-                    if ck in row_norm and row_norm[ck]:
-                        return row_norm[ck].lower()
-                # Fallback: join first two fields
-                vals = list(row_norm.values())
-                if vals:
-                    return (vals[0] + (" " + vals[1] if len(vals) > 1 else "")).lower()
-                return ""
+        # Advanced reranker
+        contexts, reranking_info = self._apply_advanced_reranking(contexts, vector_hits_rich, content_to_row, query)
 
-            # Build mapping entity -> list of contexts
-            entity_to_contexts: Dict[str, List[str]] = {}
-            if vector_hits_rich:
-                for h in vector_hits_rich:
-                    txt = (h.get('content') or '').strip()
-                    meta = h.get('meta') or {}
-                    ek = _entity_key_from_meta(meta)
-                    if ek and txt:
-                        entity_to_contexts.setdefault(ek, []).append(txt)
-            # Consolidate only when multiple contexts per entity
-            if entity_to_contexts:
-                consolidated: List[str] = []
-                used = set()
-                for ek, clist in entity_to_contexts.items():
-                    if len(clist) > 1:
-                        # Merge unique entries for this entity
-                        seen_local = set()
-                        merged_parts = []
-                        for c in clist:
-                            if c.lower() in seen_local:
-                                continue
-                            seen_local.add(c.lower())
-                            merged_parts.append(c)
-                            used.add(c)
-                        consolidated.append("\n".join(merged_parts))
-                # Append remaining contexts that weren't merged
-                for c in contexts:
-                    if (c or '').strip() and c not in used:
-                        consolidated.append(c)
-                # Replace contexts with consolidated set
-                contexts = consolidated
-        except Exception:
-            pass
-
-        # Hybrid fusion: use Reciprocal Rank Fusion (RRF) to combine BM25 and dense
-        if getattr(retrieval, 'hybrid_enabled', True):
-            candidates = contexts + stitched_texts + vector_hits
-            # Compute BM25 ranking
-            bm25_ranking: Dict[str, int] = {}
-            if candidates and getattr(retrieval, 'hybrid_use_bm25', True):
-                bm = StandardBM25([self._normalize_text(c) for c in candidates])
-                bm_scores = bm.score(self._normalize_text(query))
-                ranked_bm = sorted([(s, i) for i, s in enumerate(bm_scores)], key=lambda x: x[0], reverse=True)
-                for rnk, (_s, idx) in enumerate(ranked_bm):
-                    if 0 <= idx < len(candidates):
-                        bm25_ranking[candidates[idx]] = rnk
-            # Compute dense ranking from vector hits
-            dense_ranking: Dict[str, int] = {}
-            if vector_hits_rich and getattr(retrieval, 'hybrid_use_dense', True):
-                sorted_dense = sorted(vector_hits_rich, key=lambda h: float(h.get('score') or 0.0), reverse=True)
-                for rnk, h in enumerate(sorted_dense):
-                    t = (h.get('content') or "")
-                    if t and t not in dense_ranking:
-                        dense_ranking[t] = rnk
-            # RRF fusion with configurable k and weights
-            k_rrf = getattr(retrieval, 'rrf_k', 60)
-            w_bm = getattr(retrieval, 'rrf_w_bm25', 0.4)
-            w_vec = getattr(retrieval, 'rrf_w_dense', 0.6)
-            scores: Dict[str, float] = {}
-            for t in candidates:
-                r_bm = bm25_ranking.get(t)
-                r_vec = dense_ranking.get(t)
-                s = 0.0
-                if r_bm is not None:
-                    s += w_bm * (1.0 / (k_rrf + r_bm))
-                if r_vec is not None:
-                    s += w_vec * (1.0 / (k_rrf + r_vec))
-                scores[t] = s
-            ordered_pairs = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            # Dedup and cap
-            seen = set(); ordered: List[str] = []
-            cap = getattr(retrieval, 'rerank_input_cap', 30)
-            for t, _sc in ordered_pairs:
-                k = t[:200].lower()
-                if k in seen:
-                    continue
-                seen.add(k)
-                ordered.append(t)
-                if len(ordered) >= cap:
-                    break
-            contexts = ordered
-        else:
-            if vector_hits or stitched_texts:
-                combined = contexts + stitched_texts + vector_hits
-                seen = set(); dedup: list[str] = []
-                for c in combined:
-                    k = c[:200].lower()
-                    if k in seen:
-                        continue
-                    seen.add(k)
-                    dedup.append(c)
-                contexts = dedup[:20]
-                reranking_info = None
-        if self.reranker_enabled and contexts and len(contexts) > 3:
-            RERANK_REQUESTS.inc()
-            start_time = time.time()
-            
-            try:
-                logger.info(f"Applying reranking to {len(contexts)} contexts")
-                
-                # Get BiEncoder scores
-                bi_encoder_scores = self._get_bi_encoder_scores(query, contexts, vector_hits_rich)
-                
-                # Prepare structured contexts for CrossEncoder when available
-                structured_contexts: List[str] = []
-                label_map: Dict[str, str] = {}
-                # From vector hits metadata
-                for h in (vector_hits_rich or []):
-                    txt = (h.get('content') or '').strip()
-                    meta = h.get('meta') or {}
-                    row_map = meta.get('row') if isinstance(meta, dict) else None
-                    if txt and isinstance(row_map, dict) and row_map:
-                        label_map[txt] = self._format_labeled_row(row_map)
-                # From corpus DB snapshot (content_to_row)
-                try:
-                    for txt, row_map in (content_to_row.items() if 'content_to_row' in locals() else []):
-                        if txt and txt not in label_map and isinstance(row_map, dict) and row_map:
-                            label_map[txt] = self._format_labeled_row(row_map)
-                except Exception:
-                    pass
-                # Build final structured list
-                for c in contexts:
-                    structured_contexts.append(label_map.get(c, c))
-
-                # Execute reranking
-                rerank_result = self.reranker.multi_stage_reranking(
-                    query=query,
-                    documents=structured_contexts,
-                    bi_encoder_scores=bi_encoder_scores,
-                    top_k=min(retrieval.rerank_top_k, len(structured_contexts))
-                )
-                
-                # Update contexts with reranked results (map back to original when labeled)
-                # Map back to original content when labeled
-                if label_map:
-                    back_map: Dict[str, str] = {v: k for k, v in label_map.items()}
-                    contexts = [back_map.get(d, d) for d in rerank_result.documents]
-                else:
-                    contexts = rerank_result.documents
-                
-                processing_time = time.time() - start_time
-                RERANK_LATENCY.observe(processing_time)
-                
-                reranking_info = {
-                    "method": rerank_result.method_used,
-                    "processing_time": processing_time,
-                    "original_count": len(contexts),
-                    "reranked_count": len(rerank_result.documents)
-                }
-                
-                logger.info(f"Reranking completed: method={rerank_result.method_used}, time={processing_time:.3f}s")
-                
-            except Exception as e:
-                RERANK_ERRORS.inc()
-                logger.error(f"Reranking failed: {e}")
-                reranking_info = {"error": str(e), "fallback": True}
-
-        # LLM reranking for final context ordering
-        if contexts:
-            try:
-                contexts = self.rerank_contexts_via_llm(
-                    query,
-                    contexts,
-                    top_k=getattr(retrieval, 'rerank_top_k', 10),
-                )
-            except Exception:
-                pass
+        # LLM rerank (lightweight)
+        contexts = self._llm_rerank_contexts(contexts, query)
         # If policy-like question, extract precise sentences as a shortcut answer
         ql = query.lower()
         def split_sentences(text: str) -> List[str]:
