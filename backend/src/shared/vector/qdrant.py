@@ -22,6 +22,7 @@ class QdrantService:
         self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.collection_name = "knowledge_chunks"
         self.schema_collection = "schema_fields"
+        self.field_values_collection = "field_values"
 
     def _with_retries(self, func, *args, **kwargs):
         attempts = int(os.getenv("QDRANT_RETRIES", "10"))
@@ -116,6 +117,37 @@ class QdrantService:
                 logger.info(f"Collection {self.schema_collection} already exists")
         except Exception as e:
             logger.warning(f"Failed to create schema collection (will retry later): {e}")
+
+        # Ensure field_values collection exists
+        try:
+            collections = self._with_retries(self.client.get_collections)
+            collection_names = [col.name for col in collections.collections]
+            if self.field_values_collection not in collection_names:
+                self._with_retries(
+                    self.client.create_collection,
+                    collection_name=self.field_values_collection,
+                    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+                )
+                logger.info(f"Created Qdrant collection: {self.field_values_collection}")
+                # Payload indices for filtering
+                for fname, ftype in (
+                    ("tenant_id", "keyword"),
+                    ("document_id", "keyword"),
+                    ("field_name", "keyword"),
+                ):
+                    try:
+                        self._with_retries(
+                            self.client.create_payload_index,
+                            collection_name=self.field_values_collection,
+                            field_name=fname,
+                            field_schema=ftype
+                        )
+                    except Exception:
+                        pass
+            else:
+                logger.info(f"Collection {self.field_values_collection} already exists")
+        except Exception as e:
+            logger.warning(f"Failed to create field_values collection (will retry later): {e}")
 
     def upsert_knowledge_chunks(self, tenant_id: str, chunks: List[Dict[str, Any]]) -> None:
         """Upsert knowledge chunks for a specific tenant."""
@@ -262,6 +294,87 @@ class QdrantService:
             return True
         except Exception as e:
             logger.warning(f"delete_schema_fields_by_ids failed: {e}")
+            return False
+
+    def upsert_field_values(self, tenant_id: str, items: List[Dict[str, Any]]) -> None:
+        """Upsert field-value embeddings for a tenant.
+
+        Each item: {id, embedding, document_id, row_index, field_name, field_display, value_raw, value_norm, sheet, source_file, record_sig}
+        """
+        try:
+            points = []
+            for it in items:
+                point = PointStruct(
+                    id=it["id"],
+                    vector=it["embedding"],
+                    payload={
+                        "tenant_id": tenant_id,
+                        "document_id": it.get("document_id"),
+                        "row_index": it.get("row_index"),
+                        "field_name": it.get("field_name"),
+                        "field_display": it.get("field_display"),
+                        "value_raw": it.get("value_raw"),
+                        "value_norm": it.get("value_norm"),
+                        "sheet": it.get("sheet"),
+                        "source_file": it.get("source_file"),
+                        "record_sig": it.get("record_sig"),
+                        "kind": "field_value",
+                    }
+                )
+                points.append(point)
+            if points:
+                self._with_retries(
+                    self.client.upsert,
+                    collection_name=self.field_values_collection,
+                    points=points
+                )
+                logger.info(f"Upserted {len(points)} field_values for tenant {tenant_id}")
+        except Exception as e:
+            logger.warning(f"Failed to upsert field_values for tenant {tenant_id}: {e}")
+
+    def search_field_values(
+        self,
+        query_embedding: List[float],
+        tenant_id: str,
+        top_k: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Search field_values collection for a tenant."""
+        try:
+            filter_condition = Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))])
+            res = self._with_retries(
+                self.client.search,
+                collection_name=self.field_values_collection,
+                query_vector=query_embedding,
+                query_filter=filter_condition,
+                limit=top_k,
+            )
+            out: List[Dict[str, Any]] = []
+            for r in res:
+                out.append({
+                    "id": r.id,
+                    "score": r.score,
+                    "payload": r.payload,
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"search_field_values failed: {e}")
+            return []
+
+    def delete_field_values_for_document(self, tenant_id: str, document_id: str) -> bool:
+        """Delete field_values for a document in a tenant."""
+        try:
+            flt = Filter(must=[
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                FieldCondition(key="document_id", match=MatchValue(value=document_id)),
+            ])
+            self._with_retries(
+                self.client.delete,
+                collection_name=self.field_values_collection,
+                points_selector=flt,
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"delete_field_values_for_document failed: {e}")
             return False
 
     def search_similar_chunks(

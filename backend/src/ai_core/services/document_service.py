@@ -745,6 +745,65 @@ class DocumentService:
             except Exception:
                 pass
 
+            # Field–Value Semantic Chunking: upsert per-cell vectors (1536-dim)
+            try:
+                fv_texts: List[str] = []
+                fv_meta: List[Dict[str, Any]] = []
+                def _norm(s: str) -> str:
+                    return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower()).strip('_')
+                for ridx, row in df.iterrows():
+                    record_sig = f"{title or ''}|{sheet or ''}|{ridx}"
+                    for col in list(df.columns):
+                        try:
+                            raw_val = row.get(col)
+                        except Exception:
+                            try:
+                                raw_val = row[col]
+                            except Exception:
+                                raw_val = None
+                        if pd.isna(raw_val) or str(raw_val).strip() == '':
+                            continue
+                        field_display = str(col).strip()
+                        field_name = _norm(field_display)
+                        value_raw = str(raw_val).strip()
+                        text = f"Field: {field_display} | Value: {value_raw} | Record: {int(ridx)+1} | Sheet: {sheet or ''} | File: {title or ''}"
+                        fv_texts.append(text)
+                        fv_meta.append({
+                            "row_index": int(ridx),
+                            "field_name": field_name,
+                            "field_display": field_display,
+                            "value_raw": value_raw,
+                            "value_norm": _norm(value_raw),
+                            "sheet": sheet,
+                            "source_file": title,
+                            "record_sig": record_sig,
+                            "document_id": str(parent.id),
+                            "content": text,
+                        })
+                if fv_texts:
+                    emb = self.embed(fv_texts, force_local=False)
+                    ready: List[Dict[str, Any]] = []
+                    if emb and all(isinstance(v, list) and len(v) == 1536 for v in emb):
+                        import uuid as _uuid
+                        for m, vec in zip(fv_meta, emb):
+                            fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:fv:{m['document_id']}:{m['row_index']}:{m['field_name']}"))
+                            item = {
+                                "id": fid,
+                                "embedding": vec,
+                            }
+                            item.update(m)
+                            ready.append(item)
+                        try:
+                            qdrant_service.create_collection()
+                        except Exception:
+                            pass
+                        try:
+                            qdrant_service.upsert_field_values(tenant_id, ready)
+                        except Exception as e:
+                            logger.warning(f"Qdrant field_values upsert skipped: {e}")
+            except Exception as e:
+                logger.warning(f"Field–Value semantic chunking skipped: {e}")
+
             # Upsert schema field embeddings (one-time per sheet) into schema collection
             try:
                 # Build simple descriptions per column
