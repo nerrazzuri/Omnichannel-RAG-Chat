@@ -380,34 +380,34 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         person_context = (pronoun_ref and 'last_person' in convo_ctx) or (candidate and looks_like_person(candidate))
         if not person_context:
             # Not a person-specific query; answer via generic RAG/policy and return
-        preselected_np = candidates[:6] if candidates else []
-        # Augment with short-term memory interpreted snippets
-        try:
-            mem_buf = []
-            if isinstance(conversation.context, dict):
-                mb = conversation.context.get("memory_buffer", [])
-                if isinstance(mb, list):
-                    for entry in reversed(mb):
-                        if isinstance(entry, dict):
-                            ints = entry.get("interpreted", [])
-                            if isinstance(ints, list):
-                                for s in ints:
-                                    if isinstance(s, str) and s.strip():
-                                        mem_buf.append(s.strip())
-            # Dedup and cap memory items
-            seen_mem = set(); mem_unique = []
-            for s in mem_buf:
-                sl = s.lower()
-                if sl in seen_mem:
-                    continue
-                seen_mem.add(sl)
-                mem_unique.append(s)
-                if len(mem_unique) >= 6:
-                    break
-            preselected_np = (mem_unique + preselected_np)[:12]
-        except Exception:
-            pass
-        result_np = rag_service.answer(payload.message, preselected_contexts=preselected_np)
+            preselected_np = candidates[:6] if candidates else []
+            # Augment with short-term memory interpreted snippets
+            try:
+                mem_buf = []
+                if isinstance(conversation.context, dict):
+                    mb = conversation.context.get("memory_buffer", [])
+                    if isinstance(mb, list):
+                        for entry in reversed(mb):
+                            if isinstance(entry, dict):
+                                ints = entry.get("interpreted", [])
+                                if isinstance(ints, list):
+                                    for s in ints:
+                                        if isinstance(s, str) and s.strip():
+                                            mem_buf.append(s.strip())
+                # Dedup and cap memory items
+                seen_mem = set(); mem_unique = []
+                for s in mem_buf:
+                    sl = s.lower()
+                    if sl in seen_mem:
+                        continue
+                    seen_mem.add(sl)
+                    mem_unique.append(s)
+                    if len(mem_unique) >= 6:
+                        break
+                preselected_np = (mem_unique + preselected_np)[:12]
+            except Exception:
+                pass
+            result_np = rag_service.answer(payload.message, preselected_contexts=preselected_np)
             conversation_service.add_message(conversation, sender_type="SYSTEM", content=result_np["response"])
             return QueryResponse(**result_np)
         else:
