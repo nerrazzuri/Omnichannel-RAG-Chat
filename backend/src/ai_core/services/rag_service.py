@@ -544,6 +544,7 @@ class RAGService:
         vector_hits_rich: List[Dict[str, Any]],
         content_to_row: Dict[str, Dict[str, str]],
         query: str,
+        activated_schema_fields: Optional[List[str]] = None,
     ) -> Tuple[List[str], Optional[Dict[str, Any]]]:
         reranking_info: Optional[Dict[str, Any]] = None
         if self.reranker_enabled and contexts and len(contexts) > 3:
@@ -575,6 +576,48 @@ class RAGService:
                     bi_encoder_scores=bi_encoder_scores,
                     top_k=min(retrieval.rerank_top_k, len(structured_contexts))
                 )
+                # Schema-match bias: boost scores when fields match activated schema
+                try:
+                    bias_fields = set([str(f).strip().lower().replace(' ', '_') for f in (activated_schema_fields or []) if isinstance(f, str)])
+                    if bias_fields and hasattr(rerank_result, 'scores') and rerank_result.scores:
+                        factor = getattr(reranker_config, 'schema_bias_factor', 1.1)
+                        # Map structured doc back to original
+                        back_map: Dict[str, str] = {v: k for k, v in label_map.items()} if label_map else {}
+                        for i in range(min(len(rerank_result.documents), len(rerank_result.scores))):
+                            doc_struct = rerank_result.documents[i]
+                            original = back_map.get(doc_struct, doc_struct)
+                            matched = False
+                            # Check vector hit meta rows for field keys
+                            for h in (vector_hits_rich or []):
+                                txt = (h.get('content') or '').strip()
+                                if not txt or txt != original:
+                                    continue
+                                meta_h = h.get('meta') or {}
+                                row_h = meta_h.get('row') if isinstance(meta_h, dict) else None
+                                if isinstance(row_h, dict):
+                                    row_keys = {str(k).strip().lower().replace(' ', '_') for k in row_h.keys()}
+                                    if row_keys & bias_fields:
+                                        matched = True
+                                        break
+                            if not matched:
+                                # Parse field from field_value style content
+                                m = re.match(r"^Field:\s*([^|]+)\|", original)
+                                if m:
+                                    fdisp = m.group(1).strip().lower().replace(' ', '_')
+                                    if fdisp in bias_fields:
+                                        matched = True
+                            if matched:
+                                try:
+                                    rerank_result.scores[i] = float(rerank_result.scores[i]) * float(factor)
+                                except Exception:
+                                    pass
+                        # Re-sort by adjusted scores
+                        paired = list(zip(rerank_result.documents, rerank_result.scores))
+                        paired.sort(key=lambda x: x[1], reverse=True)
+                        rerank_result.documents = [d for d, _s in paired]
+                        rerank_result.scores = [s for _d, s in paired]
+                except Exception:
+                    pass
                 if label_map:
                     back_map: Dict[str, str] = {v: k for k, v in label_map.items()}
                     contexts = [back_map.get(d, d) for d in rerank_result.documents]
@@ -1456,8 +1499,10 @@ class RAGService:
         # Fuse contexts
         contexts = self._fuse_contexts(contexts, stitched_texts, vector_hits_rich, query, field_value_hits_rich)
 
-        # Advanced reranker
-        contexts, reranking_info = self._apply_advanced_reranking(contexts, vector_hits_rich, content_to_row, query)
+        # Advanced reranker (with schema bias)
+        contexts, reranking_info = self._apply_advanced_reranking(
+            contexts, vector_hits_rich, content_to_row, query, activated_schema_fields=expansion_terms
+        )
 
         # LLM rerank (lightweight)
         contexts = self._llm_rerank_contexts(contexts, query)

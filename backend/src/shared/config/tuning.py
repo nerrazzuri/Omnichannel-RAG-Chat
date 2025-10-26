@@ -95,6 +95,8 @@ class RerankerConfig:
     # 缓存设置
     cache_enabled: bool = os.getenv("RERANK_CACHE_ENABLED", "true").lower() in ("1", "true", "yes")
     cache_ttl: int = _get_int("RERANK_CACHE_TTL", 3600)
+    # Schema bias factor applied to matching contexts
+    schema_bias_factor: float = _get_float("RERANK_SCHEMA_BIAS_FACTOR", 1.1)
  
 # Singleton-style accessors
 chunking = ChunkingConfig()
