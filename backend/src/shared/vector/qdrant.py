@@ -202,6 +202,10 @@ class QdrantService:
                         "field_name": f.get("field_name"),
                         "description": f.get("description", ""),
                         "kind": "schema",
+                        # Optional enriched payload
+                        "aliases": f.get("aliases", []),
+                        "category": f.get("category"),
+                        "tokens": f.get("tokens", []),
                     }
                 )
                 points.append(point)

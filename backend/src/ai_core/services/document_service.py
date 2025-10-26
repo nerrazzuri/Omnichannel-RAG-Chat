@@ -765,9 +765,30 @@ class DocumentService:
                             continue
                         field_display = str(col).strip()
                         field_name = _norm(field_display)
-                        value_raw = str(raw_val).strip()
-                        text = f"Field: {field_display} | Value: {value_raw} | Record: {int(ridx)+1} | Sheet: {sheet or ''} | File: {title or ''}"
+                        # Robust value normalization for non-text fields
+                        try:
+                            if isinstance(raw_val, (int, float)):
+                                value_raw = (f"{raw_val}")
+                            else:
+                                value_raw = str(raw_val)
+                        except Exception:
+                            value_raw = str(raw_val) if raw_val is not None else ''
+                        value_raw = value_raw.strip()
+                        # Add simple hierarchical context (sheet and filename)
+                        context_bits = []
+                        if sheet:
+                            context_bits.append(f"Sheet: {sheet}")
+                        if title:
+                            context_bits.append(f"File: {title}")
+                        ctx_str = " | ".join(context_bits)
+                        text = f"Field: {field_display} | Value: {value_raw} | Record: {int(ridx)+1}" + (f" | {ctx_str}" if ctx_str else "")
                         fv_texts.append(text)
+                        # Basic importance heuristic: de-emphasize id-like fields
+                        importance = 0.8
+                        if re.search(r"\b(id|uuid|ssn|number|no)\b", field_name):
+                            importance = 0.3
+                        elif re.search(r"\b(date|dob|salary|amount|manager|department|title|position)\b", field_name):
+                            importance = 1.2
                         fv_meta.append({
                             "row_index": int(ridx),
                             "field_name": field_name,
@@ -779,6 +800,7 @@ class DocumentService:
                             "record_sig": record_sig,
                             "document_id": str(parent.id),
                             "content": text,
+                            "importance": float(importance),
                         })
                 if fv_texts:
                     emb = self.embed(fv_texts, force_local=False)
@@ -809,19 +831,30 @@ class DocumentService:
                 # Build simple descriptions per column
                 col_texts: List[str] = []
                 col_names: List[str] = []
+                col_aliases: List[List[str]] = []
+                col_tokens: List[List[str]] = []
                 for c in list(df.columns):
                     cname = str(c).strip()
                     if not cname:
                         continue
                     desc = f"Field: {cname}. Meaning: {cname.replace('_', ' ')}."
+                    # naive alias/token generation for bootstrap
+                    tokens = [t for t in re.split(r"[^a-z0-9]+", cname.lower()) if t]
+                    aliases = list(dict.fromkeys([
+                        cname,
+                        cname.replace('_', ' '),
+                        ' '.join(tokens),
+                    ]))
                     col_texts.append(desc)
                     col_names.append(cname)
+                    col_aliases.append(aliases)
+                    col_tokens.append(tokens)
                 if col_texts:
                     # Use remote embeddings to match Qdrant 1536 dim
                     schema_embs = self.embed(col_texts, force_local=False)
                     # Validate dimensions
                     ready: List[Dict[str, Any]] = []
-                    for cname, emb in zip(col_names, schema_embs):
+                    for i, (cname, emb) in enumerate(zip(col_names, schema_embs)):
                         if isinstance(emb, list) and len(emb) == 1536:
                             import uuid as _uuid
                             # Deterministic ID per tenant+field
@@ -830,7 +863,9 @@ class DocumentService:
                                 "id": fid,
                                 "embedding": emb,
                                 "field_name": cname,
-                                "description": f"{cname}"
+                                "description": f"{cname}",
+                                "aliases": col_aliases[i],
+                                "tokens": col_tokens[i],
                             })
                     if ready:
                         # Cleanup: delete stale schema fields no longer present

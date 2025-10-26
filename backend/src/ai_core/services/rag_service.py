@@ -1115,9 +1115,34 @@ class RAGService:
         # nearest schema fields
         try:
             nearest = self._nearest_schema_fields(query, tenant_id, top_k=8)
-            for f in nearest:
-                if isinstance(f, str) and f and f not in expanded_terms:
-                    expanded_terms.append(f)
+            # Normalize scores via softmax-like scaling from raw distances if available
+            scored: List[Tuple[str, float]] = []
+            if nearest:
+                # Re-query with raw results to get scores
+                emb = self._embed_with_cache(query)
+                raw = qdrant_service.search_schema_fields(query_embedding=emb, tenant_id=tenant_id, top_k=8)
+                for r in raw:
+                    nm = (r.get('payload') or {}).get('field_name')
+                    sc = float(r.get('score') or 0.0)
+                    if isinstance(nm, str) and nm:
+                        scored.append((nm, sc))
+            if scored:
+                # softmax over scores
+                import math as _m
+                maxs = max(s for (_n, s) in scored) if scored else 1.0
+                exps = [ _m.exp((s - maxs)) for (_n, s) in scored ]
+                ssum = sum(exps) or 1.0
+                weights = {n: (e/ssum) for (e, (n, _s)) in zip(exps, scored)}
+                # keep top with threshold
+                for n, w in sorted(weights.items(), key=lambda x: x[1], reverse=True):
+                    if w < 0.05:
+                        continue
+                    if n not in expanded_terms:
+                        expanded_terms.append(n)
+            else:
+                for f in nearest:
+                    if isinstance(f, str) and f and f not in expanded_terms:
+                        expanded_terms.append(f)
         except Exception:
             nearest = []
         # LLM/heuristic variants
@@ -1125,6 +1150,14 @@ class RAGService:
             variants = self.expand_queries(query, schema_fields=expanded_terms, tenant_id=tenant_id)
         except Exception:
             variants = []
+        # Log activated schema fields for synonym retraining
+        try:
+            if expanded_terms:
+                from shared.cache.synonyms_store import SynonymsStore
+                # store canonical self-mappings as activity signals
+                SynonymsStore.put_many(tenant_id, {t: t for t in expanded_terms})
+        except Exception:
+            pass
         return {"expanded_terms": expanded_terms, "variants": variants}
 
     def _nearest_schema_fields(self, query: str, tenant_id: str, top_k: int = 8) -> List[str]:
