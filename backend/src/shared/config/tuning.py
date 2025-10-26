@@ -55,6 +55,8 @@ class RetrievalConfig:
     # Hybrid retrieval and weights
     hybrid_enabled: bool = os.getenv("RETR_HYBRID_ENABLED", "true").lower() in ("1", "true", "yes")
     expansion_enabled: bool = os.getenv("RETR_EXPANSION_ENABLED", "true").lower() in ("1", "true", "yes")
+    # Boost weight for schema-aware terms appended to BM25 query
+    schema_boost_weight: float = _get_float("RETR_SCHEMA_BOOST_WEIGHT", 1.2)
     hybrid_weight_vector: float = _get_float("RETR_HYBRID_WEIGHT_VECTOR", 0.7)
     hybrid_weight_bm25: float = _get_float("RETR_HYBRID_WEIGHT_BM25", 0.3)
     # Enable/disable individual retrievers

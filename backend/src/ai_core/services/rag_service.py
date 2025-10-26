@@ -301,6 +301,7 @@ class RAGService:
         preselected_contexts: Optional[List[str]],
         tenant_id: str,
         db: Optional[Session],
+        bm25_query: Optional[str] = None,
     ) -> Tuple[List[str], List[Dict[str, Any]], Optional[List[float]], Dict[str, Dict[str, str]], List[str]]:
         contexts: List[str] = []
         vector_hits_rich: List[Dict[str, Any]] = []
@@ -347,7 +348,8 @@ class RAGService:
                         except Exception:
                             pass
                 bm25 = StandardBM25(corpus_texts)
-                bm_scores = bm25.score(query)
+                bm_q = (bm25_query or query)
+                bm_scores = bm25.score(bm_q)
                 # Vector results mapped to chunk IDs
                 vec_accum: Dict[str, float] = {}
                 unmapped_texts: List[str] = []
@@ -1104,6 +1106,27 @@ class RAGService:
             pass
         return expansions
 
+    def _expand_with_schema(self, query: str, tenant_id: str) -> Dict[str, Any]:
+        """Schema-aware query expansion: combine nearest schema fields + LLM paraphrases.
+
+        Returns: {"expanded_terms": List[str], "variants": List[str]}
+        """
+        expanded_terms: List[str] = []
+        # nearest schema fields
+        try:
+            nearest = self._nearest_schema_fields(query, tenant_id, top_k=8)
+            for f in nearest:
+                if isinstance(f, str) and f and f not in expanded_terms:
+                    expanded_terms.append(f)
+        except Exception:
+            nearest = []
+        # LLM/heuristic variants
+        try:
+            variants = self.expand_queries(query, schema_fields=expanded_terms, tenant_id=tenant_id)
+        except Exception:
+            variants = []
+        return {"expanded_terms": expanded_terms, "variants": variants}
+
     def _nearest_schema_fields(self, query: str, tenant_id: str, top_k: int = 8) -> List[str]:
         emb = self._embed_with_cache(query)
         if not emb:
@@ -1302,9 +1325,22 @@ class RAGService:
             redis_cache.set_tenant_key(tenant_id, cache_key, result_id, ttl=self.cache_ttl_seconds)
             return result_id
 
+        # Schema-aware expansion (terms + variants) prior to retrieval
+        expansion_terms: List[str] = []
+        if getattr(retrieval, 'expansion_enabled', True):
+            try:
+                exp = self._expand_with_schema(query, tenant_id)
+                expansion_terms = exp.get('expanded_terms', []) or []
+            except Exception:
+                pass
+
+        # Build enriched BM25 query with schema hints
+        bm25_hint = " ".join([t for t in expansion_terms[:8]])
+        bm25_query = (query + (" " + bm25_hint if bm25_hint else "")).strip()
+
         # Prepare candidates (retrieval + stitching + entity consolidation)
         contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts = self._prepare_candidates(
-            query, preselected_contexts, tenant_id, db
+            query, preselected_contexts, tenant_id, db, bm25_query=bm25_query
         )
 
         # Fuse contexts
