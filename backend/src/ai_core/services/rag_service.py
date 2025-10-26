@@ -302,12 +302,13 @@ class RAGService:
         tenant_id: str,
         db: Optional[Session],
         bm25_query: Optional[str] = None,
-    ) -> Tuple[List[str], List[Dict[str, Any]], Optional[List[float]], Dict[str, Dict[str, str]], List[str]]:
+    ) -> Tuple[List[str], List[Dict[str, Any]], Optional[List[float]], Dict[str, Dict[str, str]], List[str], List[Dict[str, Any]]]:
         contexts: List[str] = []
         vector_hits_rich: List[Dict[str, Any]] = []
         emb_avg: Optional[List[float]] = None
         content_to_row: Dict[str, Dict[str, str]] = {}
         stitched_texts: List[str] = []
+        field_value_hits_rich: List[Dict[str, Any]] = []
 
         if db is not None:
             try:
@@ -318,6 +319,10 @@ class RAGService:
                 vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
             except Exception:
                 vector_hits_rich = []
+            try:
+                field_value_hits_rich = self._qdrant_field_values_rich(query, tenant_id=tenant_id, top_k=getattr(retrieval, 'field_value_top_k', 8), emb_override=emb_avg)
+            except Exception:
+                field_value_hits_rich = []
             # Build BM25 over tenant chunk corpus with IDs for true fusion
             try:
                 q = (
@@ -388,6 +393,10 @@ class RAGService:
                 vector_hits_rich = self._qdrant_contexts_rich(query, tenant_id=tenant_id, top_k=retrieval.vector_top_k, emb_override=emb_avg)
             except Exception:
                 vector_hits_rich = []
+            try:
+                field_value_hits_rich = self._qdrant_field_values_rich(query, tenant_id=tenant_id, top_k=getattr(retrieval, 'field_value_top_k', 8), emb_override=emb_avg)
+            except Exception:
+                field_value_hits_rich = []
 
         # Stitch adjacent chunks for vector results
         if vector_hits_rich:
@@ -462,7 +471,7 @@ class RAGService:
         except Exception:
             pass
 
-        return contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts
+        return contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts, field_value_hits_rich
 
     def _fuse_contexts(
         self,
@@ -470,6 +479,7 @@ class RAGService:
         stitched_texts: List[str],
         vector_hits_rich: List[Dict[str, Any]],
         query: str,
+        field_value_hits_rich: Optional[List[Dict[str, Any]]] = None,
     ) -> List[str]:
         if not getattr(retrieval, 'hybrid_enabled', True):
             if stitched_texts or vector_hits_rich:
@@ -484,9 +494,13 @@ class RAGService:
                 return dedup[:20]
             return contexts
 
-        candidates = contexts + stitched_texts + [h.get('content', '') for h in (vector_hits_rich or []) if isinstance(h.get('content'), str)]
+        fv_texts = [h.get('content', '') for h in (field_value_hits_rich or []) if isinstance(h.get('content'), str)]
+        candidates = contexts + stitched_texts + [h.get('content', '') for h in (vector_hits_rich or []) if isinstance(h.get('content'), str)] + fv_texts
         bm25_texts = candidates[:]  # we will fuse at text level uniformly
-        ordered = self._fuse_candidates(bm25_texts, vector_hits_rich, query)
+        # Inject field_values into vector list with optional weight by repeating entries
+        vf = field_value_hits_rich or []
+        vector_all = list(vector_hits_rich or []) + vf
+        ordered = self._fuse_candidates(bm25_texts, vector_all, query)
         # Dedup and cap
         seen = set(); out: List[str] = []
         cap = getattr(retrieval, 'rerank_input_cap', 30)
@@ -1218,6 +1232,45 @@ class RAGService:
         except Exception:
             return []
 
+    def _qdrant_field_values_rich(self, query: str, tenant_id: str, top_k: int = 8, emb_override: Optional[list[float]] = None) -> List[Dict[str, Any]]:
+        emb = emb_override if emb_override is not None else self._embed_query(query)
+        if not emb:
+            return []
+        try:
+            results = qdrant_service.search_field_values(query_embedding=emb, tenant_id=tenant_id, top_k=top_k)
+            rich: List[Dict[str, Any]] = []
+            for r in results:
+                payload = r.get("payload") or {}
+                text = payload.get("content") or ""
+                if not isinstance(text, str) or not text:
+                    fd = payload.get("field_display") or payload.get("field_name") or ""
+                    vr = payload.get("value_raw") or payload.get("value_norm") or ""
+                    ridx = payload.get("row_index")
+                    sheet = payload.get("sheet") or ""
+                    title = payload.get("source_file") or ""
+                    parts = [
+                        f"Field: {fd}" if fd else None,
+                        f"Value: {vr}" if vr else None,
+                        f"Record: {int(ridx)+1}" if isinstance(ridx, int) else None,
+                        f"Sheet: {sheet}" if sheet else None,
+                        f"File: {title}" if title else None,
+                    ]
+                    text = " | ".join([p for p in parts if p])
+                rich.append({
+                    "content": text,
+                    "field_name": payload.get("field_name"),
+                    "field_display": payload.get("field_display"),
+                    "value_raw": payload.get("value_raw"),
+                    "value_norm": payload.get("value_norm"),
+                    "document_id": payload.get("document_id"),
+                    "row_index": payload.get("row_index"),
+                    "score": r.get("score"),
+                    "meta": payload,
+                })
+            return rich
+        except Exception:
+            return []
+
     # Public web fallback via Wikipedia API (no API key required)
     def _public_web_fallback(self, query: str) -> Optional[Dict[str, Any]]:
         try:
@@ -1372,12 +1425,12 @@ class RAGService:
         bm25_query = (query + (" " + bm25_hint if bm25_hint else "")).strip()
 
         # Prepare candidates (retrieval + stitching + entity consolidation)
-        contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts = self._prepare_candidates(
+        contexts, vector_hits_rich, emb_avg, content_to_row, stitched_texts, field_value_hits_rich = self._prepare_candidates(
             query, preselected_contexts, tenant_id, db, bm25_query=bm25_query
         )
 
         # Fuse contexts
-        contexts = self._fuse_contexts(contexts, stitched_texts, vector_hits_rich, query)
+        contexts = self._fuse_contexts(contexts, stitched_texts, vector_hits_rich, query, field_value_hits_rich)
 
         # Advanced reranker
         contexts, reranking_info = self._apply_advanced_reranking(contexts, vector_hits_rich, content_to_row, query)
