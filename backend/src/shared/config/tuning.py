@@ -43,6 +43,8 @@ class RetrievalConfig:
     hybrid_top_k: int = _get_int("RETR_HYBRID_TOP_K", 12)
     # Vector augmentation hits
     vector_top_k: int = _get_int("RETR_VECTOR_TOP_K", 8)
+    # Field-value vector hits
+    field_value_top_k: int = _get_int("RETR_FIELD_VALUE_TOP_K", 8)
     # Reranker cap and output size
     rerank_input_cap: int = _get_int("RETR_RERANK_INPUT_CAP", 30)
     rerank_top_k: int = _get_int("RETR_RERANK_TOP_K", 12)
@@ -55,8 +57,6 @@ class RetrievalConfig:
     # Hybrid retrieval and weights
     hybrid_enabled: bool = os.getenv("RETR_HYBRID_ENABLED", "true").lower() in ("1", "true", "yes")
     expansion_enabled: bool = os.getenv("RETR_EXPANSION_ENABLED", "true").lower() in ("1", "true", "yes")
-    # Boost weight for schema-aware terms appended to BM25 query
-    schema_boost_weight: float = _get_float("RETR_SCHEMA_BOOST_WEIGHT", 1.2)
     hybrid_weight_vector: float = _get_float("RETR_HYBRID_WEIGHT_VECTOR", 0.7)
     hybrid_weight_bm25: float = _get_float("RETR_HYBRID_WEIGHT_BM25", 0.3)
     # Enable/disable individual retrievers
@@ -67,7 +67,8 @@ class RetrievalConfig:
     # RRF fusion parameters
     rrf_k: int = _get_int("RETR_RRF_K", 60)
     rrf_w_bm25: float = _get_float("RETR_RRF_W_BM25", 0.4)
-    rrf_w_dense: float = _get_float("RETR_RRF_W_DENSE", 0.6)
+    rrf_w_dense: float = _get_float("RETR_RRF_W_DENSE", 0.5)
+    rrf_w_field_values: float = _get_float("RETR_RRF_W_FIELD_VALUES", 0.6)
     # Embedding and fine-tuning controls
     embedding_model: str = os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large")
     fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")

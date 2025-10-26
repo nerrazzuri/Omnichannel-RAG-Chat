@@ -252,7 +252,13 @@ class RAGService:
             return default_plan
 
     # Unified fusion policy: configurable RRF with weights
-    def _fuse_candidates(self, bm25_texts: List[str], dense_hits_rich: List[Dict[str, Any]], query: str) -> List[str]:
+    def _fuse_candidates(
+        self,
+        bm25_texts: List[str],
+        dense_hits_rich: List[Dict[str, Any]],
+        query: str,
+        field_value_hits_rich: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[str]:
         # Build candidate list
         candidates = bm25_texts[:]
         vec_map: Dict[str, float] = {}
@@ -261,6 +267,14 @@ class RAGService:
             if not t:
                 continue
             vec_map[t] = max(vec_map.get(t, 0.0), float(h.get('score') or 0.0))
+            if t not in candidates:
+                candidates.append(t)
+        fv_map: Dict[str, float] = {}
+        for h in (field_value_hits_rich or []):
+            t = (h.get('content') or '')
+            if not t:
+                continue
+            fv_map[t] = max(fv_map.get(t, 0.0), float(h.get('score') or 0.0))
             if t not in candidates:
                 candidates.append(t)
         if not candidates:
@@ -278,19 +292,29 @@ class RAGService:
             sorted_dense = sorted(vec_map.items(), key=lambda x: x[1], reverse=True)
             for rnk, (t, _sc) in enumerate(sorted_dense):
                 dense_ranking[t] = rnk
+        # Field-value ranks
+        fv_ranking: Dict[str, int] = {}
+        if fv_map:
+            sorted_fv = sorted(fv_map.items(), key=lambda x: x[1], reverse=True)
+            for rnk, (t, _sc) in enumerate(sorted_fv):
+                fv_ranking[t] = rnk
         # RRF with weights from config
         k_rrf = getattr(retrieval, 'rrf_k', 60)
         w_bm = getattr(retrieval, 'rrf_w_bm25', 0.4)
-        w_vec = getattr(retrieval, 'rrf_w_dense', 0.6)
+        w_vec = getattr(retrieval, 'rrf_w_dense', 0.5)
+        w_fv = getattr(retrieval, 'rrf_w_field_values', 0.6)
         scores: Dict[str, float] = {}
         for t in candidates:
             r_bm = bm25_ranking.get(t)
             r_vec = dense_ranking.get(t)
+            r_fv = fv_ranking.get(t)
             s = 0.0
             if r_bm is not None:
                 s += w_bm * (1.0 / (k_rrf + r_bm))
             if r_vec is not None:
                 s += w_vec * (1.0 / (k_rrf + r_vec))
+            if r_fv is not None:
+                s += w_fv * (1.0 / (k_rrf + r_fv))
             scores[t] = s
         ordered = [t for t, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
         return ordered
@@ -499,8 +523,8 @@ class RAGService:
         bm25_texts = candidates[:]  # we will fuse at text level uniformly
         # Inject field_values into vector list with optional weight by repeating entries
         vf = field_value_hits_rich or []
-        vector_all = list(vector_hits_rich or []) + vf
-        ordered = self._fuse_candidates(bm25_texts, vector_all, query)
+        vector_all = list(vector_hits_rich or [])
+        ordered = self._fuse_candidates(bm25_texts, vector_all, query, field_value_hits_rich=field_value_hits_rich)
         # Dedup and cap
         seen = set(); out: List[str] = []
         cap = getattr(retrieval, 'rerank_input_cap', 30)
