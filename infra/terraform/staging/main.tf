@@ -133,3 +133,71 @@ resource "kubernetes_service" "frontend" {
 }
 
 
+resource "kubernetes_deployment" "gateway" {
+  metadata {
+    name      = "gateway"
+    namespace = var.namespace
+  }
+  spec {
+    replicas = 2
+    selector {
+      match_labels = { app = "gateway" }
+    }
+    template {
+      metadata {
+        labels = { app = "gateway" }
+      }
+      spec {
+        container {
+          name  = "gateway"
+          image = var.image_gateway
+          port {
+            container_port = 3001
+          }
+          env {
+            name  = "AI_CORE_URL"
+            value = "http://ai-core:8000"
+          }
+          env {
+            name = "JWT_SECRET"
+            value_from {
+              secret_key_ref {
+                name = "omni-secrets"
+                key  = "jwt-secret"
+              }
+            }
+          }
+          readiness_probe {
+            http_get {
+              path = "/api/health"
+              port = 3001
+            }
+            initial_delay_seconds = 5
+          }
+          liveness_probe {
+            http_get {
+              path = "/api/health"
+              port = 3001
+            }
+            initial_delay_seconds = 10
+          }
+        }
+      }
+    }
+  }
+}
+
+resource "kubernetes_service" "gateway" {
+  metadata {
+    name      = "gateway"
+    namespace = var.namespace
+  }
+  spec {
+    selector = { app = "gateway" }
+    port {
+      port        = 3001
+      target_port = 3001
+    }
+  }
+}
+

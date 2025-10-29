@@ -92,9 +92,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         app_logger.error(f"Startup validation failed: {e}")
         raise
-    # Initialize database tables (dev/test SQLite); in production use Alembic
+    # Initialize schema: create tables in dev; Alembic upgrade in non-dev
     try:
-        create_tables()
+        env = os.getenv("ENV", "dev").lower()
+        if env in ("dev", "local", "test"):
+            create_tables()
+        else:
+            try:
+                from alembic.config import Config as _AlConfig
+                from alembic import command as _alcmd
+                import pathlib as _pl
+                base = _pl.Path(__file__).resolve().parents[3]  # backend/
+                cfg = _AlConfig(str(base / "alembic.ini"))
+                _alcmd.upgrade(cfg, "head")
+            except Exception as _e:
+                app_logger.error(f"Alembic upgrade failed: {_e}")
+                raise
     except Exception as e:
         app_logger.warning(f"DB initialization skipped/failed: {e}")
     # Seed default tenant for development/staging to avoid FK violations

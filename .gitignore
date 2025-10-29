@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 *.zip
 *.xlsx
-*.json
 .DS_Store
 /node_modules
 /.venv
@@ -12,7 +11,8 @@ __pycache__/
 /.vscode
 /__pycache__/
 /backend/src.zip
-/key.json
+key.json
+secrets/*.json
 /Total Data.xlsx
 # Dependencies
 node_modules/

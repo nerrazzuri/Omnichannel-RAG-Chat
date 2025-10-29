@@ -29,3 +29,10 @@ variable "image_frontend" {
 }
 
 
+variable "image_gateway" {
+  type        = string
+  description = "Container image for Gateway"
+  default     = "ghcr.io/example/gateway:latest"
+}
+
+
