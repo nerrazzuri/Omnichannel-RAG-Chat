@@ -1,0 +1,262 @@
+from typing import Dict, Any, List, Optional
+import time
+
+
+class RAGPipeline:
+    """
+    Orchestrator coordinating schema expansion -> retrieval -> fusion -> reranking -> formatting.
+    This module contains no heavy computation; it delegates to submodules.
+    """
+
+    def __init__(self):
+        # Lazy imports to avoid startup overhead and circulars
+        from .schema.schema_expander import SchemaExpander
+        from .intent.intent_classifier import IntentClassifier
+        from .intent.router import HybridContextualRouter
+        from .structured.structured_executor import StructuredExecutor
+        from .retriever.retriever_manager import RetrieverManager
+        from .fusion.rank_fusion import RankFusion
+        from .reranker.crossencoder_reranker import CrossEncoderReranker
+        from .reranker.schema_bias_reranker import SchemaBiasReranker
+        from .formatter.context_builder import ContextBuilder
+        from .formatter.response_formatter import ResponseFormatter
+        from .qc.post_generation_qc import PostGenerationQC
+        from .fallback.confidence_checker import ConfidenceChecker
+        from .fallback.semantic_fallback import SemanticFallback
+        from .cache.cache_facade import PipelineCache
+        import logging
+
+        self.schema_expander = SchemaExpander()
+        self.intent = IntentClassifier()
+        self.intent_router = HybridContextualRouter()
+        self.structured = StructuredExecutor()
+        self.retriever = RetrieverManager()
+        self.fusion = RankFusion()
+        self.cross_reranker = CrossEncoderReranker()
+        self.schema_bias = SchemaBiasReranker()
+        self.context_builder = ContextBuilder()
+        self.response_formatter = ResponseFormatter()
+        self.qc = PostGenerationQC()
+        self.confidence_checker = ConfidenceChecker()
+        self.semantic_fallback = SemanticFallback(self.retriever, self.fusion, self.cross_reranker, self.schema_bias)
+        self.cache = PipelineCache()
+        self.log = logging.getLogger(__name__)
+
+    def answer(
+        self,
+        query: str,
+        tenant_id: str,
+        preselected_contexts: Optional[List[str]] = None,
+        db: Any = None,
+        user_id: Optional[str] = None,
+        channel: Optional[str] = "web",
+        correlation_id: Optional[str] = None,
+        auth_type: Optional[str] = None,
+        api_key_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """High-level pipeline flow. This mirrors current rag_service logic, but delegates work."""
+        self.log.info(f"pipeline: start tenant={tenant_id}")
+        # Structured logging
+        try:
+            from shared.logging.pipeline_logger import PipelineLogger
+            plog = PipelineLogger(tenant_id)
+        except Exception:
+            plog = None
+        t_start = time.time()
+        if plog:
+            plog.emit({"query": query})
+        # 1) Intent classification via Hybrid Router (with conversation context when available)
+        conversation_context: List[Dict[str, Any]] = []
+        try:
+            if db and user_id:
+                from ai_core.services.conversation_service import ConversationService
+                conv = ConversationService(db)
+                conversation_context = conv.get_recent_messages_by_ids(tenant_id, user_id, limit=5)
+        except Exception:
+            conversation_context = []
+        decision = self.intent_router.classify(query, conversation_context, tenant_id, user_id or "anon")
+        intent = decision.intent
+        self.log.info(f"pipeline: intent={intent}")
+        if plog:
+            plog.emit({"intent": intent, "router_decision": {
+                "confidence": decision.confidence,
+                "source": decision.source,
+                "contextual_trigger": decision.contextual_trigger,
+            }})
+
+        expanded = self.schema_expander.expand(query, tenant_id)
+        self.log.info(f"pipeline: expanded_terms={len(expanded.get('expanded_terms', []))}")
+        if plog:
+            plog.emit({"schema_expansion": {"count": len(expanded.get("expanded_terms", []))}})
+
+        retrieved = self.retriever.retrieve_all(
+            query=query,
+            tenant_id=tenant_id,
+            db=db,
+            preselected_contexts=preselected_contexts,
+            expansion_terms=expanded.get("expanded_terms", []),
+        )
+
+        fused = self.fusion.fuse(
+            bm25_texts=retrieved.get("bm25_texts", []),
+            dense_hits=retrieved.get("dense_hits", []),
+            field_value_hits=retrieved.get("field_value_hits", []),
+            query=query,
+            tenant_id=tenant_id,
+        )
+        self.log.info(f"pipeline: candidates after fuse={len(fused)}")
+        if plog:
+            plog.emit({"retrieval": {
+                "bm25_hits": len(retrieved.get("bm25_texts", [])),
+                "vector_hits": len(retrieved.get("dense_hits", [])),
+                "field_hits": len(retrieved.get("field_value_hits", []))
+            }})
+
+        reranked_docs = self.cross_reranker.rerank(
+            query,
+            fused,
+            rich_hits=retrieved.get("dense_hits", []),
+            content_to_row=retrieved.get("content_to_row", {}),
+        )
+        reranked_docs = self.schema_bias.apply(
+            query,
+            reranked_docs,
+            activated_fields=expanded.get("expanded_terms", []),
+            rich_hits=retrieved.get("field_value_hits", []),
+        )
+        self.log.info(f"pipeline: reranked_docs={len(reranked_docs)}")
+        if plog:
+            plog.emit({"rerank": {"input": len(fused), "output": len(reranked_docs)}})
+        # Audit retrieval/rerank
+        try:
+            if db:
+                from ai_core.pipeline.audit_service import write_audit
+                elapsed_ms = int((time.time() - t_start) * 1000)
+                write_audit(
+                    db=db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    action="retrieval:rerank",
+                    resource="knowledge",
+                    request_text=query,
+                    response_text="\n".join([d.get("text", "")[:200] if isinstance(d, dict) else str(d)[:200] for d in reranked_docs[:5]]),
+                    success=True,
+                    latency_ms=elapsed_ms,
+                    model=None,
+                    token_input=None,
+                    token_output=None,
+                    category="access",
+                    auth_type=auth_type,
+                    api_key_id=api_key_id,
+                    correlation_id=correlation_id,
+                )
+        except Exception:
+            pass
+
+        # 2) Structured executor for aggregate intent (prefer before retrieval)
+        result_hint = None
+        if intent == "aggregate":
+            try:
+                # Attempt to assemble a DataFrame from the most recent document's rows via retriever metadata
+                import pandas as _pd  # type: ignore
+                rows: List[Dict[str, Any]] = []
+                schema_cols: List[str] = []
+                for hit in retrieved.get("dense_hits", []):
+                    pl = hit.get("payload", {})
+                    meta = pl.get("metadata") or pl
+                    row = meta.get("row") if isinstance(meta, dict) else None
+                    if isinstance(row, dict) and row:
+                        rows.append(row)
+                    cols = pl.get("columns") or []
+                    if isinstance(cols, list) and cols:
+                        schema_cols = [str(c) for c in cols]
+                if rows:
+                    df = _pd.DataFrame(rows)
+                    schema_info = {"columns": [c.lower() for c in (list(df.columns) if not schema_cols else schema_cols)], "types": {}}
+                    context = {"tenant_id": tenant_id, "intent": intent, "query": query}
+                    agg = self.structured.execute(query, df, schema_info, context)
+                    if agg and isinstance(agg.get("summary"), str):
+                        # If we have a structured result, skip retrieval/rerank and answer directly
+                        payload = self.response_formatter.generate(query, [agg.get("summary", "")], intent=intent, result_hint=agg.get("summary"))
+                        self.log.info(f"executor: used structured result -> {agg.get('summary')}")
+                        if plog:
+                            plog.emit({"executor": {"used": True, "operation": "aggregate"}})
+                        return payload
+            except Exception:
+                self.log.warning("structured executor path failed; falling back")
+
+        ctx_texts = self.context_builder.build(reranked_docs)
+        # Build structured snippets with S# IDs for orchestrator and citations
+        try:
+            structured_snippets = self.context_builder.build_structured_from_texts(ctx_texts, cap=min(30, len(ctx_texts)))
+        except Exception:
+            structured_snippets = [{"id": f"S{i+1}", "source_label": f"chunk_{i+1}", "text": t} for i, t in enumerate(ctx_texts[:30])]
+        payload = self.response_formatter.generate(query, structured_snippets, intent=intent, result_hint=result_hint, tenant_id=tenant_id)
+        if plog:
+            try:
+                model_name = getattr(getattr(self.response_formatter, "_llm", None), "model", "unknown")
+            except Exception:
+                model_name = "unknown"
+            plog.emit({"generation": {"model": model_name, "ctx_used": len(ctx_texts)}})
+        try:
+            payload = self.qc.run(self.response_formatter._llm, payload, query, ctx_texts, intent, result_hint)
+            if plog:
+                qc = payload.get("qc_status", {})
+                plog.emit({"qc": {"confidence": qc.get("confidence"), "rewrite": qc.get("rewrite_used")}})
+        except Exception:
+            pass
+        self.log.info(f"pipeline: response_len={len(payload.get('response',''))} ctx_used={len(ctx_texts)}")
+        # Audit generation
+        try:
+            if db:
+                from ai_core.pipeline.audit_service import write_audit
+                model_name = getattr(getattr(self.response_formatter, "_llm", None), "model", "unknown")
+                elapsed_ms = int((time.time() - t_start) * 1000)
+                write_audit(
+                    db=db,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    action="generation:answer",
+                    resource="llm",
+                    request_text=query,
+                    response_text=str(payload.get("response", ""))[:1000],
+                    success=True,
+                    latency_ms=elapsed_ms,
+                    model=model_name,
+                    token_input=None,
+                    token_output=None,
+                    category="generation",
+                    auth_type=auth_type,
+                    api_key_id=api_key_id,
+                    correlation_id=correlation_id,
+                )
+        except Exception:
+            pass
+
+        if self.confidence_checker.low(payload):
+            fb = self.semantic_fallback.run(query, tenant_id, db)
+            if fb:
+                self.log.info("pipeline: semantic fallback used")
+                if plog:
+                    plog.emit({"fallback": {"used": True}})
+                return fb
+
+        if plog:
+            plog.emit({"latency_ms": int((time.time() - t_start) * 1000)})
+
+        # Attach intent metadata for downstream consumers (eval, UI)
+        try:
+            payload["intent"] = intent
+            payload["intent_decision"] = {
+                "intent": decision.intent,
+                "confidence": decision.confidence,
+                "source": decision.source,
+                "contextual_trigger": decision.contextual_trigger,
+                "tenant_overrides_used": decision.tenant_overrides_used,
+            }
+        except Exception:
+            pass
+
+        return payload
+
+

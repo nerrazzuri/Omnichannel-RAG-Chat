@@ -10,6 +10,10 @@ import logging
 import time
 import os
 from shared.config.settings import settings
+from shared.config.tuning import retrieval, qdrant_recovery, quant
+from shared.utils.circuit_breaker import circuit_breaker
+from shared.utils.retry import retry_with_backoff
+from shared.metrics.reliability_metrics import reliability_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -17,26 +21,65 @@ class QdrantService:
     """Qdrant vector database service with tenant isolation."""
 
     def __init__(self, url: Optional[str] = None, api_key: Optional[str] = None):
-        qdrant_url = url or settings.qdrant_url
-        qdrant_api_key = api_key or settings.qdrant_api_key
-        self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+        self._url = url or settings.qdrant_url
+        self._api_key = api_key or settings.qdrant_api_key
+        self.client = QdrantClient(url=self._url, api_key=self._api_key)
         self.collection_name = "knowledge_chunks"
         self.schema_collection = "schema_fields"
         self.field_values_collection = "field_values"
+        # Resolve vector size dynamically based on embedding model
+        self.vector_size = self._resolve_vector_size()
+        self._last_health_ts = 0.0
+
+    def _resolve_vector_size(self) -> int:
+        """Return the expected vector size based on configured embedding model.
+
+        - text-embedding-3-large: 3072
+        - text-embedding-3-small: 1536
+        - bge-large-en-v1.5: 1024 (common); fallback to 1536 for unknowns
+        """
+        model = (retrieval.embedding_model or "").lower()
+        try:
+            if "text-embedding-3-large" in model:
+                return 3072
+            if "text-embedding-3-small" in model:
+                return 1536
+            if "bge-large" in model:
+                return 1024
+        except Exception:
+            pass
+        return 1536
+
+    def _ensure_client(self) -> None:
+        """Recreate Qdrant client if needed."""
+        if self.client is None:
+            self.client = QdrantClient(url=self._url, api_key=self._api_key)
 
     def _with_retries(self, func, *args, **kwargs):
-        attempts = int(os.getenv("QDRANT_RETRIES", "10"))
-        delay = float(os.getenv("QDRANT_RETRY_DELAY", "1.0"))
-        last_exc: Optional[Exception] = None
-        for _ in range(attempts):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                last_exc = e
-                time.sleep(delay)
-        if last_exc:
-            raise last_exc
-        return None
+        @retry_with_backoff("qdrant.call")
+        def _runner():
+            return func(*args, **kwargs)
+        try:
+            if not circuit_breaker.allow("qdrant", tenant_id=None):
+                raise RuntimeError("circuit_open")
+            self._ensure_client()
+            res = _runner()
+            circuit_breaker.record_success("qdrant", tenant_id=None)
+            return res
+        except Exception as e:  # noqa: BLE001
+            circuit_breaker.record_failure("qdrant", tenant_id=None)
+            reliability_metrics.inc_retry("qdrant.call")
+            raise e
+
+    def ping(self) -> bool:
+        try:
+            self._ensure_client()
+            _ = self.client.get_collections()
+            circuit_breaker.record_success("qdrant", tenant_id=None)
+            return True
+        except Exception:
+            circuit_breaker.record_failure("qdrant", tenant_id=None)
+            return False
 
     def create_collection(self) -> None:
         """Create the knowledge chunks collection if it doesn't exist."""
@@ -49,7 +92,7 @@ class QdrantService:
                 self._with_retries(
                     self.client.create_collection,
                     collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
                 )
                 logger.info(f"Created Qdrant collection: {self.collection_name}")
 
@@ -84,6 +127,11 @@ class QdrantService:
         except Exception as e:
             # Degrade gracefully; caller may retry later
             logger.warning(f"Failed to create Qdrant collection (will retry later): {e}")
+            # Try a soft reconnect once
+            try:
+                self.client = QdrantClient(url=self._url, api_key=self._api_key)
+            except Exception:
+                pass
 
         # Ensure schema collection exists as well
         try:
@@ -93,7 +141,7 @@ class QdrantService:
                 self._with_retries(
                     self.client.create_collection,
                     collection_name=self.schema_collection,
-                    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
                 )
                 logger.info(f"Created Qdrant collection: {self.schema_collection}")
                 # Payload index for tenant filtering
@@ -126,7 +174,7 @@ class QdrantService:
                 self._with_retries(
                     self.client.create_collection,
                     collection_name=self.field_values_collection,
-                    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
                 )
                 logger.info(f"Created Qdrant collection: {self.field_values_collection}")
                 # Payload indices for filtering
@@ -155,9 +203,18 @@ class QdrantService:
             collection_name = self.collection_name
             points = []
             for chunk in chunks:
+                vec = chunk["embedding"]
+                if quant.enabled and isinstance(vec, list):
+                    try:
+                        # Simple rounding quantization
+                        qvec = [round(float(x), quant.decimals) for x in vec]
+                    except Exception:
+                        qvec = vec
+                else:
+                    qvec = vec
                 point = PointStruct(
                     id=chunk["id"],
-                    vector=chunk["embedding"],
+                    vector=qvec,
                     payload={
                         "tenant_id": tenant_id,
                         "document_id": chunk["document_id"],

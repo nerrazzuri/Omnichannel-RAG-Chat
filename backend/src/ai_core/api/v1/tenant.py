@@ -6,13 +6,17 @@ from sqlalchemy.orm import Session
 from ai_core.models.knowledge import DocumentUploadRequest, DocumentUploadResponse
 from ai_core.services.document_service import DocumentService
 from shared.database.session import get_db
+from ai_core.api.deps import require
 from shared.cache.redis import redis_cache
 
 router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
-def upload_document(body: DocumentUploadRequest, db: Session = Depends(get_db)) -> DocumentUploadResponse:
+def upload_document(body: DocumentUploadRequest, claims=Depends(require("ingestion:write", resource={"classification":"internal"})), db: Session = Depends(get_db)) -> DocumentUploadResponse:
+    # Cross-tenant enforcement
+    if str(claims.get("role")) != "ADMIN" and str(body.tenant_id) != str(claims.get("tenant_id")):
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
     if not body.tenant_id or not body.title or not body.content:
         raise HTTPException(status_code=400, detail="Missing tenantId, title or content")
     kb_id = body.knowledge_base_id or "00000000-0000-0000-0000-000000000000"
@@ -28,8 +32,12 @@ async def upload_document_file(
     knowledgeBaseId: str = Form("00000000-0000-0000-0000-000000000000"),
     jobId: str = Form(None),
     file: UploadFile = File(...),
+    claims=Depends(require("ingestion:write", resource={"classification":"internal"})),
     db: Session = Depends(get_db),
 ):
+    # Cross-tenant enforcement
+    if str(claims.get("role")) != "ADMIN" and str(tenantId) != str(claims.get("tenant_id")):
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
     try:
         # Validate inputs
         if not tenantId:

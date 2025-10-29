@@ -14,6 +14,7 @@ from .models import Base
 import os
 import time
 import logging
+from shared.config.tuning import db_pool
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,17 @@ def _create_engine_for_url(url: str):
             url,
             poolclass=StaticPool,
             connect_args={"check_same_thread": False},
-            echo=True,  # Set to False in production
+            echo=db_pool.echo,
         )
     # Non-SQLite: use default pooling and pre_ping
     return create_engine(
         url,
-        echo=True,  # Set to False in production
+        echo=db_pool.echo,
         pool_pre_ping=True,
+        pool_size=db_pool.pool_size,
+        max_overflow=db_pool.max_overflow,
+        pool_recycle=db_pool.pool_recycle,
+        pool_timeout=db_pool.pool_timeout,
     )
 
 def _try_connect(test_engine, attempts: int = 10, delay_seconds: float = 1.0) -> bool:
@@ -102,6 +107,20 @@ def get_db() -> Session:
             _initialized = True
     db = SessionLocal()
     try:
+        # Proactive ping to avoid stale connections in long-lived pools
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception:
+            # Attempt to recreate engine and session on failure
+            global engine, SessionLocal  # noqa: PLW0603
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+            engine = _create_engine_for_url(DATABASE_URL)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            db.close()
+            db = SessionLocal()
         yield db
     finally:
         db.close()

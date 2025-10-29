@@ -50,7 +50,11 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - QDRANT_URL=http://qdrant:6333
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - RAG_EMBED_MODEL=text-embedding-3-large
+      - RAG_CHAT_MODEL=gpt-4o-mini
       - JWT_SECRET=${JWT_SECRET}
+      - AUTH_ALLOW_ALL=1
+      - AUTH_BYPASS_TENANT=00000000-0000-0000-0000-000000000001
     depends_on:
       postgresql:
         condition: service_healthy
@@ -75,6 +79,8 @@ services:
     environment:
       - AI_CORE_URL=http://ai-core:8000
       - JWT_SECRET=${JWT_SECRET}
+      - AUTH_ALLOW_ALL=1
+      - AUTH_BYPASS_TENANT=00000000-0000-0000-0000-000000000001
     depends_on:
       ai-core:
         condition: service_healthy

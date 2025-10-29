@@ -4,7 +4,6 @@ from typing import Dict, Any, List
 from pydantic import BaseModel
  
 from ...services.reranker_service import get_reranker, create_reranker
-from ...services.rag_service import RAGService
  
 router = APIRouter(prefix="/reranker", tags=["reranker"])
  
@@ -45,9 +44,12 @@ async def rerank_documents(
 async def get_reranker_status():
     """Get reranker status and configuration."""
     try:
-        # 从RAGService获取状态
-        rag_service = RAGService()
-        return rag_service.get_reranker_status()
+        reranker = get_reranker()
+        return {
+            "enabled": True,
+            "model_info": reranker.get_model_info(),
+            "config": {}
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
  
@@ -57,9 +59,13 @@ async def toggle_reranker(
 ):
     """Toggle reranker on/off."""
     try:
-        rag_service = RAGService()
-        result = rag_service.toggle_reranker(enabled)
-        return {"enabled": result}
+        reranker = get_reranker()
+        # Toggle handled in reranker instance if supported; else return input
+        try:
+            reranker.enabled = bool(enabled)
+        except Exception:
+            pass
+        return {"enabled": bool(enabled)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
  

@@ -16,9 +16,22 @@ from ai_core.api.webhooks.telegram import router as telegram_router
 from ai_core.api.v1.internal import router as internal_router
 from ai_core.api.v1.tenant import router as tenant_router
 from .api.v1.reranker import router as reranker_router
+from ai_core.api.v1.admin.api_keys import router as apikey_router
+from ai_core.api.v1.admin.rerank import router as rerank_admin_router
+from ai_core.api.v1.feedback import router as feedback_router
 from shared.database.session import create_tables, SessionLocal
 from shared.database.models import Tenant
 import uuid
+import threading
+import time
+
+from shared.vector.qdrant import qdrant_service
+from shared.queue.retry_queue import retry_queue
+from ai_core.pipeline.embedding.embedding_service import EmbeddingService
+from shared.metrics.reliability_metrics import reliability_metrics
+from shared.config.tuning import qdrant_recovery
+from shared.metrics.cost_aggregator import rolling_cost
+from shared.config.tuning import cost as cost_cfg
 
 # Configure structured logging
 class ColorFormatter(logging.Formatter):
@@ -50,6 +63,7 @@ app_logger = logging.getLogger(__name__)
 # Correlation ID middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid as _uuid
+from ai_core.api.middleware.access import AccessControlMiddleware
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -94,9 +108,117 @@ async def lifespan(app: FastAPI):
             db.close()
     except Exception as e:
         app_logger.warning(f"Default tenant seeding failed or skipped: {e}")
+
+    # Background: Qdrant health monitor and retry worker
+    stop_flag = {"stop": False}
+
+    def _qdrant_health_loop():
+        last_ok = time.time()
+        while not stop_flag["stop"]:
+            ok = qdrant_service.ping()
+            if ok:
+                last_ok = time.time()
+            time.sleep(max(0.1, qdrant_recovery.health_interval_ms / 1000.0))
+
+    def _retry_worker_loop():
+        emb = EmbeddingService()
+        while not stop_flag["stop"]:
+            # process embedding jobs
+            job = retry_queue.dequeue("embed_query", timeout=1)
+            if job:
+                try:
+                    tenant_id = str(job.get("tenant_id") or "global")
+                    payload = job.get("payload") or {}
+                    q = str(payload.get("query") or "")
+                    if q:
+                        _ = emb.embed_query(q, tenant_id)
+                except Exception:
+                    pass
+                continue
+            # process qdrant upsert jobs
+            job2 = retry_queue.dequeue("qdrant_upsert", timeout=1)
+            if job2:
+                try:
+                    tenant_id = str(job2.get("tenant_id") or "global")
+                    payload = job2.get("payload") or {}
+                    chunks = payload.get("chunks") or []
+                    if chunks:
+                        qdrant_service.upsert_knowledge_chunks(tenant_id, chunks)
+                except Exception:
+                    pass
+                continue
+            # process audit logs
+            job3 = retry_queue.dequeue("audit_log", timeout=1)
+            if job3:
+                try:
+                    payload = job3.get("payload") or {}
+                    tenant_id = str(job3.get("tenant_id") or payload.get("tenant_id") or "global")
+                    from shared.database.session import SessionLocal as _SL
+                    s = _SL()
+                    try:
+                        from shared.database.models import AuditLog as _Audit
+                        rec = _Audit(
+                            tenant_id=tenant_id,
+                            user_id=payload.get("user_id"),
+                            api_key_id=payload.get("api_key_id"),
+                            correlation_id=payload.get("correlation_id"),
+                            auth_type=payload.get("auth_type"),
+                            category=payload.get("category"),
+                            action=payload.get("action"),
+                            resource=payload.get("resource"),
+                            classification=payload.get("classification"),
+                            origin=payload.get("origin"),
+                            request_hash=payload.get("request_hash"),
+                            response_hash=payload.get("response_hash"),
+                            success=bool(payload.get("success")),
+                            latency_ms=int(payload.get("latency_ms") or 0),
+                            model=payload.get("model"),
+                            token_input=payload.get("token_input"),
+                            token_output=payload.get("token_output"),
+                            extra=payload.get("extra") or {},
+                        )
+                        s.add(rec)
+                        s.commit()
+                    finally:
+                        s.close()
+                except Exception:
+                    pass
+                continue
+            # flush cost summaries periodically
+            now = time.time()
+            if int(now) % max(1, cost_cfg.persist_interval_s) == 0:
+                try:
+                    snap = rolling_cost.snapshot_and_clear()
+                    if snap:
+                        from shared.database.session import SessionLocal as _SL
+                        s = _SL()
+                        try:
+                            from shared.database.models import CostSummary as _CS
+                            for (tenant, model, kind), (tin, tout, usd) in snap.items():
+                                cents = int(round(usd * 100.0))
+                                rec = _CS(
+                                    tenant_id=tenant,
+                                    model=model,
+                                    kind=kind,
+                                    tokens_in=int(tin),
+                                    tokens_out=int(tout),
+                                    cost_usd=cents,
+                                )
+                                s.add(rec)
+                            s.commit()
+                        finally:
+                            s.close()
+                except Exception:
+                    pass
+
+    t1 = threading.Thread(target=_qdrant_health_loop, daemon=True)
+    t2 = threading.Thread(target=_retry_worker_loop, daemon=True)
+    t1.start()
+    t2.start()
     yield
     app_logger.info("Shutting down AI Core service...")
     # Cleanup logic here
+    stop_flag["stop"] = True
 
 # Create FastAPI application
 app = FastAPI(
@@ -117,6 +239,7 @@ app.add_middleware(
 
 # Add correlation ID middleware
 app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(AccessControlMiddleware)
 
 # Global exception handler to ensure JSON responses
 @app.exception_handler(Exception)
@@ -162,6 +285,9 @@ app.include_router(teams_router)
 app.include_router(telegram_router)
 app.include_router(tenant_router)
 app.include_router(reranker_router)
+app.include_router(apikey_router)
+app.include_router(rerank_admin_router)
+app.include_router(feedback_router)
 
 if __name__ == "__main__":
     import uvicorn

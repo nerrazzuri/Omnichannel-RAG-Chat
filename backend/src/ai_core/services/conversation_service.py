@@ -93,4 +93,27 @@ class ConversationService:
         )
         return list(self.db.execute(stmt).scalars().all())
 
+    def get_active_conversation(self, tenant_id: str, user_id: str, channel: str = "web") -> Optional[Conversation]:
+        stmt = (
+            select(Conversation)
+            .where(Conversation.tenant_id == tenant_id)
+            .where(Conversation.user_id == user_id)
+            .where(Conversation.channel == channel)
+            .where(Conversation.status == "ACTIVE")
+        )
+        return self.db.execute(stmt).scalars().first()
+
+    def get_recent_messages_by_ids(self, tenant_id: str, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+        convo = self.get_active_conversation(tenant_id, user_id)  # default channel
+        if not convo:
+            return []
+        msgs = self.get_recent_messages(convo, limit=limit)
+        out: List[Dict[str, Any]] = []
+        for m in msgs:
+            try:
+                out.append({"content": m.content, "meta": (m.meta or {})})
+            except Exception:
+                out.append({"content": m.content, "meta": {}})
+        return out
+
 
