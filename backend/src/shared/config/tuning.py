@@ -252,6 +252,10 @@ class ConnectorConfig:
     default_interval_s: int = _get_int("CONNECTOR_DEFAULT_INTERVAL_S", 900)
     # run scheduler loop
     scheduler_enabled: bool = os.getenv("CONNECTOR_SCHEDULER_ENABLED", "true").lower() in ("1", "true", "yes")
+    # optional manifest JSON file mapping connectors to tenants
+    manifest_json_path: str = os.getenv("CONNECTOR_MANIFEST_JSON", "")
+    # cursor TTL seconds for connector delta checkpoints
+    cursor_ttl_seconds: int = _get_int("CONNECTOR_CURSOR_TTL_S", 7 * 24 * 3600)
 
 
 connectors = ConnectorConfig()

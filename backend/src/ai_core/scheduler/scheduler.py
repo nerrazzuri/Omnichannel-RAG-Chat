@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import List
+from typing import List, Tuple
+import logging
+import json
 
 from shared.config.tuning import connectors
 from ai_core.connectors.registry import registry
@@ -24,6 +26,7 @@ class ConnectorScheduler:
         self._interval = connectors.default_interval_s
         # Parse enabled names
         self._names = [n.strip() for n in connectors.enabled_names.split(',') if n.strip()]
+        self._log = logging.getLogger(__name__)
 
     def stop(self) -> None:
         self._stop = True
@@ -31,19 +34,52 @@ class ConnectorScheduler:
     def loop(self) -> None:
         if not connectors.enabled or not connectors.scheduler_enabled:
             return
+        pairs: List[Tuple[str, str]] = []  # (tenant_id, connector_name)
+        # Optional manifest JSON mapping {"connectors":[{"name":"sharepoint","tenants":["..."]}, ...]}
+        try:
+            if connectors.manifest_json_path:
+                with open(connectors.manifest_json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for item in (data.get('connectors') or []):
+                    nm = str(item.get('name','')).strip()
+                    for tid in (item.get('tenants') or []):
+                        pairs.append((str(tid), nm))
+        except Exception as e:
+            self._log.warning(f"Connector manifest load failed: {e}")
+            pairs = []
         while not self._stop:
             start = time.time()
-            for tenant in self._tenants:
-                for name in self._names:
-                    cls = registry.get(name)
-                    if not cls:
-                        continue
+            # Build run list
+            run_list: List[Tuple[str, str]] = []
+            if pairs:
+                run_list = pairs
+            else:
+                # Fallback: dynamic tenant discovery + enabled names
+                try:
+                    from shared.database.session import SessionLocal
+                    from shared.database.models import Tenant
+                    s = SessionLocal()
                     try:
-                        c = cls(tenant)
-                        c.run_sync()
-                    except Exception:
-                        # Silent; metrics already updated in connector
-                        pass
+                        tids = [str(t.id) for t in s.query(Tenant.id).all()]
+                    finally:
+                        s.close()
+                except Exception as e:
+                    self._log.warning(f"Tenant discovery failed: {e}; using provided list")
+                    tids = list(self._tenants)
+                for tenant in tids:
+                    for name in self._names:
+                        run_list.append((tenant, name))
+
+            for tenant, name in run_list:
+                cls = registry.get(name)
+                if not cls:
+                    continue
+                try:
+                    c = cls(tenant)
+                    c.run_sync()
+                except Exception as e:
+                    # Log connector-specific errors with context
+                    self._log.exception(f"Connector run failed: connector={name} tenant={tenant} error={e}")
             elapsed = time.time() - start
             sleep_s = max(1.0, self._interval - elapsed)
             time.sleep(sleep_s)

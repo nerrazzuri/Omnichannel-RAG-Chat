@@ -8,6 +8,7 @@ from shared.cache.redis import redis_cache
 from shared.metrics.connector_metrics import connector_metrics
 from shared.utils.retry import retry_with_backoff
 from shared.utils.circuit_breaker import circuit_breaker
+from shared.config.tuning import connectors as connectors_cfg
 
 
 @dataclass
@@ -37,7 +38,8 @@ class BaseConnector:
         return redis_cache.get_tenant_key(self.tenant_id, self._cursor_key())
 
     def set_cursor(self, value: str) -> None:
-        redis_cache.set_tenant_key(self.tenant_id, self._cursor_key(), value, ttl=7*24*3600)
+        ttl = int(getattr(connectors_cfg, 'cursor_ttl_seconds', 7*24*3600))
+        redis_cache.set_tenant_key(self.tenant_id, self._cursor_key(), value, ttl=ttl)
 
     def list_updates(self, since: Optional[str]) -> Iterable[Dict[str, Any]]:  # noqa: D401 (interface)
         """Return iterable of update descriptors from source system."""
