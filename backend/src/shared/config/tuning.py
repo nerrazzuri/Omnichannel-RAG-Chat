@@ -261,3 +261,19 @@ class ConnectorConfig:
 connectors = ConnectorConfig()
 
 
+# ------------------------------
+# Agent Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class AgentConfig:
+    enabled: bool = os.getenv("AGENTS_ENABLED", "false").lower() in ("1", "true", "yes")
+    max_steps: int = _get_int("AGENT_MAX_STEPS", 6)
+    max_tokens_reasoning: int = _get_int("AGENT_MAX_TOKENS_REASONING", 4000)
+    time_budget_ms: int = _get_int("AGENT_TIME_BUDGET_MS", 20000)
+    sandbox_mode: bool = os.getenv("AGENT_SANDBOX", "true").lower() in ("1", "true", "yes")
+
+
+agents = AgentConfig()
+
+
