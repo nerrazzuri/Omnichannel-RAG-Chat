@@ -12,6 +12,7 @@ from shared.queue.retry_queue import retry_queue
 from shared.metrics.cost_metrics import cost_metrics
 from shared.metrics.cost_aggregator import rolling_cost
 from shared.throttling.quota import throttle
+from shared.config.tuning import retries
 
 
 class EmbeddingService:
@@ -86,7 +87,7 @@ class EmbeddingService:
         except Exception as e:  # noqa: BLE001
             circuit_breaker.record_failure("openai_embed", tenant_id)
             # enqueue for async retry (best-effort)
-            if retries.queue_enabled:
+            if hasattr(retries, "queue_enabled") and retries.queue_enabled:
                 try:
                     retry_queue.enqueue(
                         job_type="embed_query",

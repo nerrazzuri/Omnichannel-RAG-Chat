@@ -84,6 +84,14 @@ REQUEST_LATENCY = Histogram('ai_core_request_latency_seconds', 'Request latency'
 async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
     app_logger.info("Starting AI Core service...")
+    # Startup validations and uptime start
+    global _START_TS
+    _START_TS = __import__('time').time()
+    try:
+        _validate_startup()
+    except Exception as e:
+        app_logger.error(f"Startup validation failed: {e}")
+        raise
     # Initialize database tables (dev/test SQLite); in production use Alembic
     try:
         create_tables()
@@ -239,6 +247,21 @@ async def lifespan(app: FastAPI):
     # Cleanup logic here
     stop_flag["stop"] = True
 
+# Startup model validation & uptime
+_START_TS = None
+def _validate_startup() -> None:
+    # JWT secret check is handled in jwt service, but warn here too if weak
+    try:
+        sec = os.getenv("JWT_SECRET", "")
+        if sec and len(sec) < 32:
+            app_logger.warning("JWT_SECRET seems weak (<32 chars).")
+    except Exception:
+        pass
+    # Model validation
+    model = os.getenv("LLM_MODEL") or os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini")
+    if not model:
+        raise RuntimeError("LLM_MODEL environment variable must be set.")
+
 # Create FastAPI application
 app = FastAPI(
     title="Omnichannel RAG Chatbot - AI Core",
@@ -247,14 +270,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Add CORS middleware (restricted by default unless DEV)
+DEV = os.getenv("ENV", "dev").lower() in ("dev", "local", "test")
+allow_origins = ["*"] if DEV else [o for o in (os.getenv("ALLOW_ORIGINS", "").split(",")) if o]
+if not allow_origins:
+    allow_origins = ["http://localhost:3000"] if DEV else []
+if not DEV and ("*" in allow_origins):
+    app_logger.warning("Wildcard CORS in non-dev environment.")
+app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # Add correlation ID middleware
 app.add_middleware(CorrelationIdMiddleware)
@@ -285,13 +308,36 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 @app.get("/v1/health")
 async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "service": "ai_core",
-        "version": "1.0.0",
-        "timestamp": "2025-01-01T00:00:00Z"
-    }
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    uptime = 0
+    try:
+        if _START_TS:
+            uptime = int((now.timestamp() - _START_TS))
+    except Exception:
+        uptime = 0
+    return {"status": "ok", "time_utc": now.isoformat().replace("+00:00","Z"), "uptime_seconds": uptime}
+
+@app.get("/v1/ready")
+async def ready_check():
+    from shared.cache.redis import redis_cache
+    from shared.database.session import SessionLocal
+    ok_db = False
+    ok_redis = False
+    try:
+        s = SessionLocal()
+        try:
+            s.execute("SELECT 1")
+            ok_db = True
+        finally:
+            s.close()
+    except Exception:
+        ok_db = False
+    try:
+        ok_redis = bool(redis_cache.ping())
+    except Exception:
+        ok_redis = False
+    return {"status": "ok" if (ok_db and ok_redis) else "degraded", "db": ok_db, "redis": ok_redis}
 
 @app.get("/metrics")
 async def metrics():

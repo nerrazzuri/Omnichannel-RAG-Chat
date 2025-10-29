@@ -17,7 +17,7 @@ class LLMClient:
     def __init__(self) -> None:
         api_key = secret_manager.get("OPENAI_API_KEY")
         self.client = OpenAI(api_key=api_key) if api_key else None
-        self.model = os.getenv("RAG_CHAT_MODEL", "gpt-5-mini")
+        self.model = os.getenv("LLM_MODEL") or os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini")
         self.temperature = float(os.getenv("RAG_CHAT_TEMPERATURE", "0.3"))
         self._orchestrator = PromptOrchestrator()
         self._system_policy = (
