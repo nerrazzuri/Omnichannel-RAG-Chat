@@ -239,3 +239,21 @@ quant = QuantizationConfig()
 quality_gate = QualityGateConfig()
 
 
+# ------------------------------
+# Connector & Scheduler Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class ConnectorConfig:
+    enabled: bool = os.getenv("CONNECTORS_ENABLED", "false").lower() in ("1", "true", "yes")
+    # comma-separated list of connector names to load
+    enabled_names: str = os.getenv("CONNECTORS_LIST", "sharepoint,googledrive,salesforce")
+    # default sync interval seconds
+    default_interval_s: int = _get_int("CONNECTOR_DEFAULT_INTERVAL_S", 900)
+    # run scheduler loop
+    scheduler_enabled: bool = os.getenv("CONNECTOR_SCHEDULER_ENABLED", "true").lower() in ("1", "true", "yes")
+
+
+connectors = ConnectorConfig()
+
+

@@ -32,6 +32,7 @@ from shared.metrics.reliability_metrics import reliability_metrics
 from shared.config.tuning import qdrant_recovery
 from shared.metrics.cost_aggregator import rolling_cost
 from shared.config.tuning import cost as cost_cfg
+from shared.config.tuning import connectors as connectors_cfg
 
 # Configure structured logging
 class ColorFormatter(logging.Formatter):
@@ -215,6 +216,24 @@ async def lifespan(app: FastAPI):
     t2 = threading.Thread(target=_retry_worker_loop, daemon=True)
     t1.start()
     t2.start()
+
+    # Start connector scheduler if enabled
+    scheduler_thread = None
+    if connectors_cfg.enabled and connectors_cfg.scheduler_enabled:
+        try:
+            # Discover tenants (for demo, include default only); extend to real tenant list in production
+            tenants = ["00000000-0000-0000-0000-000000000001"]
+            from ai_core.scheduler.scheduler import ConnectorScheduler
+            sched = ConnectorScheduler(tenants)
+            def _sched_loop():
+                try:
+                    sched.loop()
+                except Exception:
+                    pass
+            scheduler_thread = threading.Thread(target=_sched_loop, daemon=True)
+            scheduler_thread.start()
+        except Exception:
+            pass
     yield
     app_logger.info("Shutting down AI Core service...")
     # Cleanup logic here

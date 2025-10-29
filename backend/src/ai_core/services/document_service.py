@@ -40,6 +40,57 @@ def chunk_text(text: str, chunk_size: int = 700, overlap: int = 100) -> List[str
 class DocumentService:
     def __init__(self, db: Session):
         self.db = db
+    # ------------------------------
+    # Normalized connector ingestion
+    # ------------------------------
+    def process_normalized_records(self, records: list) -> int:
+        """Ingest normalized connector records with dedup detection.
+
+        Records are dict-like objects with fields per NormalizedRecord.
+        """
+        from shared.database.models import KnowledgeBase, Document, KnowledgeChunk, KnowledgeBase as _KB
+        import uuid as _uuid
+        count = 0
+        for rec in records:
+            try:
+                tenant_id = rec.tenant_id if hasattr(rec, 'tenant_id') else rec.get('tenant_id')
+                source_system = rec.source_system if hasattr(rec, 'source_system') else rec.get('source_system')
+                external_id = rec.external_id if hasattr(rec, 'external_id') else rec.get('external_id')
+                title = rec.title if hasattr(rec, 'title') else rec.get('title')
+                content = rec.content if hasattr(rec, 'content') else rec.get('content')
+                meta = {
+                    "source_system": source_system,
+                    "external_id": external_id,
+                    "owner": getattr(rec, 'owner', None) if hasattr(rec, 'owner') else rec.get('owner'),
+                    "classification": getattr(rec, 'classification', None) if hasattr(rec, 'classification') else rec.get('classification'),
+                }
+                # Find or create a default KB for connector ingestion
+                kb = self.db.query(KnowledgeBase).filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.name == "connector").first()
+                if not kb:
+                    kb = KnowledgeBase(tenant_id=tenant_id, name="connector")
+                    self.db.add(kb); self.db.commit(); self.db.refresh(kb)
+                # Dedup: existing document with same external id and source
+                existing = self.db.query(Document).filter(Document.knowledge_base_id == kb.id, Document.meta['external_id'].astext == external_id, Document.meta['source_system'].astext == source_system).first()
+                if existing:
+                    doc = existing
+                else:
+                    doc = Document(knowledge_base_id=kb.id, title=title, content=content[:160], meta=meta, status="PROCESSING")
+                    self.db.add(doc); self.db.commit(); self.db.refresh(doc)
+                # Create one chunk per record (can be extended to chunking later)
+                kc = KnowledgeChunk(
+                    id=_uuid.uuid4(),
+                    document_id=doc.id,
+                    content=content[:1600],
+                    chunk_index=0,
+                    embedding=None,
+                    meta={"source": source_system}
+                )
+                self.db.add(kc); self.db.commit()
+                count += 1
+            except Exception:
+                self.db.rollback()
+                continue
+        return count
         try:
             from shared.security.secret_manager import secret_manager
             api_key = secret_manager.get("OPENAI_API_KEY")
