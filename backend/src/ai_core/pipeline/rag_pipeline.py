@@ -56,11 +56,14 @@ class RAGPipeline:
     ) -> Dict[str, Any]:
         """High-level pipeline flow. This mirrors current rag_service logic, but delegates work."""
         self.log.info(f"pipeline: start tenant={tenant_id}")
+        import logging
+        logger = logging.getLogger(__name__)
         # Structured logging
         try:
             from shared.logging.pipeline_logger import PipelineLogger
             plog = PipelineLogger(tenant_id)
-        except Exception:
+        except Exception as e:
+            logger.exception("[rag.plog] init error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
             plog = None
         t_start = time.time()
         if plog:
@@ -72,7 +75,8 @@ class RAGPipeline:
                 from ai_core.services.conversation_service import ConversationService
                 conv = ConversationService(db)
                 conversation_context = conv.get_recent_messages_by_ids(tenant_id, user_id, limit=5)
-        except Exception:
+        except Exception as e:
+            logger.exception("[rag.context] fetch error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
             conversation_context = []
         decision = self.intent_router.classify(query, conversation_context, tenant_id, user_id or "anon")
         intent = decision.intent
@@ -150,8 +154,8 @@ class RAGPipeline:
                     api_key_id=api_key_id,
                     correlation_id=correlation_id,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("[rag.audit.retrieval] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
 
         # 2) Structured executor for aggregate intent (prefer before retrieval)
         result_hint = None
@@ -203,8 +207,8 @@ class RAGPipeline:
             if plog:
                 qc = payload.get("qc_status", {})
                 plog.emit({"qc": {"confidence": qc.get("confidence"), "rewrite": qc.get("rewrite_used")}})
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("[rag.qc] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
         self.log.info(f"pipeline: response_len={len(payload.get('response',''))} ctx_used={len(ctx_texts)}")
         # Audit generation
         try:
@@ -230,8 +234,8 @@ class RAGPipeline:
                     api_key_id=api_key_id,
                     correlation_id=correlation_id,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("[rag.audit.generation] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
 
         if self.confidence_checker.low(payload):
             fb = self.semantic_fallback.run(query, tenant_id, db)

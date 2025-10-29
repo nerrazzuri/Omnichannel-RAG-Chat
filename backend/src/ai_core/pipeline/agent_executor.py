@@ -7,6 +7,7 @@ from shared.config.tuning import agents as agent_cfg
 from shared.metrics.agent_metrics import agent_metrics
 from shared.security.policy import Policy
 from ai_core.pipeline.audit_service import write_audit
+import logging
 
 
 class AgentExecutor:
@@ -23,6 +24,7 @@ class AgentExecutor:
             plan = self.agent.plan(goal, {"tenant_id": tenant_id})[:agent_cfg.max_steps]
         except Exception as e:
             agent_metrics.inc_failure(name, tenant_id)
+            logging.getLogger(__name__).exception("[agent.plan] error", extra={"tenant_id": tenant_id, "action": "agent.exec", "agent": name})
             return {"ok": False, "error": str(e)}
         steps_out: List[Dict[str, Any]] = []
         for step in plan:
@@ -55,6 +57,7 @@ class AgentExecutor:
                     pass
             except Exception as e:
                 agent_metrics.inc_failure(name, tenant_id)
+                logging.getLogger(__name__).exception("[agent.execute] error", extra={"tenant_id": tenant_id, "action": action, "agent": name})
                 steps_out.append({"action": action, "status": "error", "error": str(e)})
         dur = time.time() - t0
         agent_metrics.observe_duration(name, dur)

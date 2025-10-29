@@ -33,6 +33,8 @@ from shared.config.tuning import qdrant_recovery
 from shared.metrics.cost_aggregator import rolling_cost
 from shared.config.tuning import cost as cost_cfg
 from shared.config.tuning import connectors as connectors_cfg
+from shared.metrics.stability_metrics import stability_metrics
+from shared.utils.log_and_continue import log_and_continue
 
 # Configure structured logging
 class ColorFormatter(logging.Formatter):
@@ -135,14 +137,23 @@ async def lifespan(app: FastAPI):
     stop_flag = {"stop": False}
 
     def _qdrant_health_loop():
+        app_logger.info("qdrant health loop started", extra={"module_name": "qdrant_health", "pid": os.getpid()})
         last_ok = time.time()
         while not stop_flag["stop"]:
-            ok = qdrant_service.ping()
-            if ok:
-                last_ok = time.time()
+            try:
+                ok = qdrant_service.ping()
+                if ok:
+                    last_ok = time.time()
+                else:
+                    stability_metrics.inc_bg_failure("qdrant_health")
+            except Exception as e:
+                stability_metrics.inc_bg_failure("qdrant_health")
+                stability_metrics.inc_bg_retry("qdrant_health")
+                log_and_continue(e, "qdrant.health", None, None)
             time.sleep(max(0.1, qdrant_recovery.health_interval_ms / 1000.0))
 
     def _retry_worker_loop():
+        app_logger.info("retry worker loop started", extra={"module_name": "retry_worker", "pid": os.getpid()})
         emb = EmbeddingService()
         while not stop_flag["stop"]:
             # process embedding jobs
@@ -154,8 +165,10 @@ async def lifespan(app: FastAPI):
                     q = str(payload.get("query") or "")
                     if q:
                         _ = emb.embed_query(q, tenant_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    stability_metrics.inc_bg_failure("retry_worker")
+                    stability_metrics.inc_bg_retry("retry_worker")
+                    log_and_continue(e, "retry_worker.embed", tenant_id, None)
                 continue
             # process qdrant upsert jobs
             job2 = retry_queue.dequeue("qdrant_upsert", timeout=1)
@@ -166,8 +179,10 @@ async def lifespan(app: FastAPI):
                     chunks = payload.get("chunks") or []
                     if chunks:
                         qdrant_service.upsert_knowledge_chunks(tenant_id, chunks)
-                except Exception:
-                    pass
+                except Exception as e:
+                    stability_metrics.inc_bg_failure("retry_worker")
+                    stability_metrics.inc_bg_retry("retry_worker")
+                    log_and_continue(e, "retry_worker.qdrant_upsert", tenant_id, None)
                 continue
             # process audit logs
             job3 = retry_queue.dequeue("audit_log", timeout=1)
@@ -203,8 +218,10 @@ async def lifespan(app: FastAPI):
                         s.commit()
                     finally:
                         s.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    stability_metrics.inc_bg_failure("retry_worker")
+                    stability_metrics.inc_bg_retry("retry_worker")
+                    log_and_continue(e, "retry_worker.audit_persist", tenant_id, None)
                 continue
             # flush cost summaries periodically
             now = time.time()
@@ -230,8 +247,9 @@ async def lifespan(app: FastAPI):
                             s.commit()
                         finally:
                             s.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    stability_metrics.inc_bg_failure("retry_worker")
+                    log_and_continue(e, "retry_worker.cost_flush", None, None)
 
     t1 = threading.Thread(target=_qdrant_health_loop, daemon=True)
     t2 = threading.Thread(target=_retry_worker_loop, daemon=True)
@@ -249,8 +267,9 @@ async def lifespan(app: FastAPI):
             def _sched_loop():
                 try:
                     sched.loop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    stability_metrics.inc_bg_failure("scheduler")
+                    log_and_continue(e, "connector.scheduler", None, None)
             scheduler_thread = threading.Thread(target=_sched_loop, daemon=True)
             scheduler_thread.start()
         except Exception:

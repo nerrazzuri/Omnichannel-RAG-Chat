@@ -9,6 +9,7 @@ from shared.metrics.connector_metrics import connector_metrics
 from shared.utils.retry import retry_with_backoff
 from shared.utils.circuit_breaker import circuit_breaker
 from shared.config.tuning import connectors as connectors_cfg
+import logging
 
 
 @dataclass
@@ -82,6 +83,7 @@ class BaseConnector:
         except Exception as e:  # noqa: BLE001
             circuit_breaker.record_failure(f"connector_{name}", tenant)
             connector_metrics.inc_fail(name, tenant)
+            logging.getLogger(__name__).exception("[connector.list] error", extra={"tenant_id": tenant, "connector": name})
             return {"ok": False, "error": str(e)}
 
         records: List[NormalizedRecord] = []
@@ -94,8 +96,9 @@ class BaseConnector:
                     records.append(rec)
                 # advance cursor heuristically
                 new_cursor = upd.get("cursor") or new_cursor
-            except Exception:
+            except Exception as e:
                 connector_metrics.inc_fail(name, tenant)
+                logging.getLogger(__name__).exception("[connector.fetch_or_normalize] error", extra={"tenant_id": tenant, "connector": name})
                 continue
 
         ingested = 0

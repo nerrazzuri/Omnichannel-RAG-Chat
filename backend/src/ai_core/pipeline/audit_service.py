@@ -56,8 +56,9 @@ def write_audit(
         }
         retry_queue.enqueue("audit_log", tenant_id, payload)
         return
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("[audit.enqueue] error", extra={"tenant_id": tenant_id, "action": action})
 
     try:
         rec = AuditLog(
@@ -82,10 +83,12 @@ def write_audit(
         )
         db.add(rec)
         db.commit()
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("[audit.write] error", extra={"tenant_id": tenant_id, "action": action})
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception as e2:
+            logging.getLogger(__name__).exception("[audit.rollback] error", extra={"tenant_id": tenant_id})
 
 

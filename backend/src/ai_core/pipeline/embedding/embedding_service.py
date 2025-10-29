@@ -13,6 +13,8 @@ from shared.metrics.cost_metrics import cost_metrics
 from shared.metrics.cost_aggregator import rolling_cost
 from shared.throttling.quota import throttle
 from shared.config.tuning import retries
+import hashlib
+import logging
 
 
 class EmbeddingService:
@@ -22,7 +24,8 @@ class EmbeddingService:
         self.model = getattr(retrieval, 'embedding_model', os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"))
 
     def _cache_key(self, text: str) -> str:
-        return f"emb:{self.model}:{hash(text)}"
+        digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+        return f"emb:{self.model}:{digest}"
 
     def embed_query(self, query: str, tenant_id: str) -> Optional[List[float]]:
         if not query or not self.client:
@@ -100,8 +103,8 @@ class EmbeddingService:
         finally:
             try:
                 throttle.release(tenant_id, kind="embed")
-            except Exception:
-                pass
+        except Exception as e:
+            logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
         return None
 
 

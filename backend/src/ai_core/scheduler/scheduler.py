@@ -79,7 +79,7 @@ class ConnectorScheduler:
                     c.run_sync()
                 except Exception as e:
                     # Log connector-specific errors with context
-                    self._log.exception(f"Connector run failed: connector={name} tenant={tenant} error={e}")
+                    self._log.exception(f"Connector run failed", extra={"tenant_id": tenant, "connector": name, "module_name": "scheduler", "action": "connector.sync"})
             elapsed = time.time() - start
             sleep_s = max(1.0, self._interval - elapsed)
             time.sleep(sleep_s)
