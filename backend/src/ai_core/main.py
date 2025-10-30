@@ -203,30 +203,53 @@ async def lifespan(app: FastAPI):
                     user_id = _clean_uuid(payload.get("user_id"))
                     api_key_id = _clean_uuid(payload.get("api_key_id"))
                     from shared.database.session import SessionLocal as _SL
+                    from sqlalchemy import text as _sql
                     s = _SL()
                     try:
-                        from shared.database.models import AuditLog as _Audit
-                        rec = _Audit(
-                            tenant_id=tenant_id,
-                            user_id=user_id,
-                            api_key_id=api_key_id,
-                            correlation_id=payload.get("correlation_id"),
-                            auth_type=payload.get("auth_type"),
-                            category=payload.get("category"),
-                            action=payload.get("action"),
-                            resource=payload.get("resource"),
-                            classification=payload.get("classification"),
-                            origin=payload.get("origin"),
-                            request_hash=payload.get("request_hash"),
-                            response_hash=payload.get("response_hash"),
-                            success=bool(payload.get("success")),
-                            latency_ms=int(payload.get("latency_ms") or 0),
-                            model=payload.get("model"),
-                            token_input=payload.get("token_input"),
-                            token_output=payload.get("token_output"),
-                            extra=payload.get("extra") or {},
-                        )
-                        s.add(rec)
+                        # Discover available columns for backward-compat inserts
+                        cols = []
+                        try:
+                            rows = s.execute(_sql("SELECT column_name FROM information_schema.columns WHERE table_name='audit_log'")).fetchall()
+                            cols = [r[0] for r in rows]
+                        except Exception:
+                            cols = []
+                        now_id = str(_uuidmod.uuid4())
+                        field_map = {
+                            "id": now_id,
+                            "tenant_id": tenant_id,
+                            "user_id": user_id,
+                            "api_key_id": api_key_id,
+                            "correlation_id": payload.get("correlation_id"),
+                            "auth_type": payload.get("auth_type"),
+                            "category": payload.get("category"),
+                            "action": payload.get("action"),
+                            "resource": payload.get("resource"),
+                            "classification": payload.get("classification"),
+                            "origin": payload.get("origin"),
+                            "request_hash": payload.get("request_hash"),
+                            "response_hash": payload.get("response_hash"),
+                            "success": bool(payload.get("success")),
+                            "latency_ms": int(payload.get("latency_ms") or 0),
+                            "model": payload.get("model"),
+                            "token_input": payload.get("token_input"),
+                            "token_output": payload.get("token_output"),
+                            "extra": payload.get("extra") or {},
+                        }
+                        # Filter to existing columns only
+                        insert_cols = [c for c in field_map.keys() if (not cols) or (c in cols)]
+                        # Build parameterized INSERT
+                        placeholders = []
+                        params = {}
+                        casts = {"id": "::UUID", "tenant_id": "::UUID", "user_id": "::UUID", "api_key_id": "::UUID"}
+                        for c in insert_cols:
+                            key = f"p_{c}"
+                            params[key] = field_map[c]
+                            cast = casts.get(c, "")
+                            placeholders.append(f"%({key})s{cast}")
+                        col_list = ", ".join(insert_cols + ["created_at"]) if ("created_at" not in insert_cols) else ", ".join(insert_cols)
+                        val_list = ", ".join(placeholders + (["now()"] if "created_at" not in insert_cols else []))
+                        sql = _sql(f"INSERT INTO audit_log ({col_list}) VALUES ({val_list})")
+                        s.execute(sql, params)
                         s.commit()
                     finally:
                         s.close()
