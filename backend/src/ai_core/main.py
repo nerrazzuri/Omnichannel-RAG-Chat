@@ -189,15 +189,27 @@ async def lifespan(app: FastAPI):
             if job3:
                 try:
                     payload = job3.get("payload") or {}
-                    tenant_id = str(job3.get("tenant_id") or payload.get("tenant_id") or "global")
+                    tenant_id_raw = job3.get("tenant_id") or payload.get("tenant_id")
+                    # Sanitize UUID fields to avoid DB binding errors
+                    import uuid as _uuidmod
+                    def _clean_uuid(val):
+                        try:
+                            if val is None:
+                                return None
+                            return str(_uuidmod.UUID(str(val)))
+                        except Exception:
+                            return None
+                    tenant_id = _clean_uuid(tenant_id_raw) or "00000000-0000-0000-0000-000000000001"
+                    user_id = _clean_uuid(payload.get("user_id"))
+                    api_key_id = _clean_uuid(payload.get("api_key_id"))
                     from shared.database.session import SessionLocal as _SL
                     s = _SL()
                     try:
                         from shared.database.models import AuditLog as _Audit
                         rec = _Audit(
                             tenant_id=tenant_id,
-                            user_id=payload.get("user_id"),
-                            api_key_id=payload.get("api_key_id"),
+                            user_id=user_id,
+                            api_key_id=api_key_id,
                             correlation_id=payload.get("correlation_id"),
                             auth_type=payload.get("auth_type"),
                             category=payload.get("category"),
