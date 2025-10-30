@@ -1,4 +1,5 @@
 from typing import Dict, Any, List
+import re
 
 from ai_core.pipeline.llm.llm_client import LLMClient
 
@@ -7,7 +8,7 @@ class ResponseFormatter:
     def __init__(self) -> None:
         self._llm = LLMClient()
 
-    def generate(self, query: str, contexts: List[str], intent: str = "lookup", result_hint: str | None = None, tenant_id: str | None = None) -> Dict[str, Any]:
+    def generate(self, query: str, contexts: List[Any], intent: str = "lookup", result_hint: str | None = None, tenant_id: str | None = None) -> Dict[str, Any]:
         """Use the same prompt and LLM call style as rag_service to assemble final payload.
 
         For now, delegate to rag_service prompt template and OpenAI client to keep parity.
@@ -19,17 +20,44 @@ class ResponseFormatter:
                 "confidence": 0.0,
                 "requiresHuman": True,
             }
-        gen = self._llm.generate(query, contexts, intent=intent, result_hint=result_hint, tenant_id=tenant_id)
-        generated_text = (gen.get("text") or "").strip() or (contexts[0][:300] if contexts else "")
-        # Citations: mirror rag_service best-effort from contexts
+        # Normalize contexts to dict snippets {id, source_label, text, doc?}
+        norm_ctx: List[Dict[str, Any]] = []
+        for i, c in enumerate(contexts):
+            if isinstance(c, dict):
+                norm_ctx.append(c)
+            else:
+                norm_ctx.append({"id": f"S{i+1}", "source_label": f"Context {i+1}", "text": str(c)})
+        gen = self._llm.generate(query, norm_ctx, intent=intent, result_hint=result_hint, tenant_id=tenant_id)
+        # Fallback preview uses first snippet text
+        first_text = str(norm_ctx[0].get("text", "")) if norm_ctx else ""
+        generated_text = (gen.get("text") or "").strip() or (first_text[:300] if first_text else "")
+        # Parse [S#] tokens from model output and map to provenance
+        id_to_ctx = {str(s.get("id")): s for s in norm_ctx if isinstance(s, dict) and s.get("id")}
+        found_ids = [m.group(1) for m in re.finditer(r"\[(S\d+)\]", generated_text)]
         citations: List[Dict[str, Any]] = []
-        for i, ctx in enumerate(contexts[:6]):
+        seen: set[str] = set()
+        for sid in found_ids:
+            if sid in seen:
+                continue
+            seen.add(sid)
+            snip = id_to_ctx.get(sid)
+            if not snip:
+                continue
+            doc = snip.get("doc") or {}
             citations.append({
-                "source": f"chunk_{i}",
-                "title": f"Context {i+1}",
-                "relevance": 0.8,
-                "snippet": ctx[:160],
+                "id": sid,
+                "title": doc.get("title") or snip.get("source_label") or sid,
+                "source_url": doc.get("source_url"),
             })
+        # If none found, include up to first 3 snippets as best-effort
+        if not citations:
+            for s in norm_ctx[:3]:
+                doc = s.get("doc") or {}
+                citations.append({
+                    "id": s.get("id"),
+                    "title": doc.get("title") or s.get("source_label"),
+                    "source_url": doc.get("source_url"),
+                })
         payload = {
             "response": generated_text,
             "citations": citations,
@@ -42,7 +70,7 @@ class ResponseFormatter:
             joined = "\n".join(contexts[:3])
             ratio = difflib.SequenceMatcher(a=generated_text.lower(), b=joined.lower()).ratio()
             if ratio > 0.9 and intent in ("summary", "lookup"):
-                gen2 = self._llm.generate(query, contexts, intent="summary", result_hint=result_hint, tenant_id=tenant_id)
+                gen2 = self._llm.generate(query, norm_ctx, intent="summary", result_hint=result_hint, tenant_id=tenant_id)
                 txt2 = (gen2.get("text") or "").strip()
                 if txt2 and len(txt2) < len(generated_text):
                     payload["response"] = txt2

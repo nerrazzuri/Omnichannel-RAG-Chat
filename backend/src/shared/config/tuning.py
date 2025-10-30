@@ -78,6 +78,11 @@ class RetrievalConfig:
     semantic_fallback_topk_multiplier: int = _get_int("RETR_SEMANTIC_FALLBACK_TOPK_MULT", 2)
     # BM25 corpus size limit when building tenant corpus
     bm25_corpus_limit: int = _get_int("RETR_BM25_CORPUS_LIMIT", 2000)
+    # BM25 cache TTL seconds
+    bm25_cache_ttl_s: int = _get_int("RETR_BM25_CACHE_TTL_S", 600)
+    # DuckDB connection lifecycle controls
+    duckdb_conn_ttl_s: int = _get_int("RETR_DUCKDB_CONN_TTL_S", 900)
+    duckdb_max_conns: int = _get_int("RETR_DUCKDB_MAX_CONNS", 16)
     # Embedding and fine-tuning controls
     embedding_model: str = os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large")
     fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")

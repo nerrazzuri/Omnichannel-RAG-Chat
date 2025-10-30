@@ -190,11 +190,29 @@ class RAGPipeline:
                 self.log.warning("structured executor path failed; falling back")
 
         ctx_texts = self.context_builder.build(reranked_docs)
-        # Build structured snippets with S# IDs for orchestrator and citations
+        # Build structured snippets with S# IDs and enrich with provenance when available
+        structured_snippets = []
         try:
-            structured_snippets = self.context_builder.build_structured_from_texts(ctx_texts, cap=min(30, len(ctx_texts)))
+            text_to_meta = retrieved.get("text_to_docmeta", {})
         except Exception:
-            structured_snippets = [{"id": f"S{i+1}", "source_label": f"chunk_{i+1}", "text": t} for i, t in enumerate(ctx_texts[:30])]
+            text_to_meta = {}
+        try:
+            for i, t in enumerate(ctx_texts[: min(30, len(ctx_texts))], start=1):
+                sid = f"S{i}"
+                meta = text_to_meta.get(t, {}) if isinstance(text_to_meta, dict) else {}
+                title = meta.get("title") or f"Context {i}"
+                structured_snippets.append({
+                    "id": sid,
+                    "source_label": title,
+                    "text": t,
+                    "doc": {
+                        "document_id": meta.get("document_id"),
+                        "title": meta.get("title"),
+                        "source_url": meta.get("source_url"),
+                    },
+                })
+        except Exception:
+            structured_snippets = [{"id": f"S{i+1}", "source_label": f"Context {i+1}", "text": t} for i, t in enumerate(ctx_texts[:30])]
         payload = self.response_formatter.generate(query, structured_snippets, intent=intent, result_hint=result_hint, tenant_id=tenant_id)
         if plog:
             try:
@@ -203,12 +221,23 @@ class RAGPipeline:
                 model_name = "unknown"
             plog.emit({"generation": {"model": model_name, "ctx_used": len(ctx_texts)}})
         try:
-            payload = self.qc.run(self.response_formatter._llm, payload, query, ctx_texts, intent, result_hint)
+            payload = self.qc.run(self.response_formatter._llm, payload, query, structured_snippets, intent, result_hint)
             if plog:
                 qc = payload.get("qc_status", {})
                 plog.emit({"qc": {"confidence": qc.get("confidence"), "rewrite": qc.get("rewrite_used")}})
         except Exception as e:
             logger.exception("[rag.qc] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
+        # Propagate QC confidence to top-level and record metric
+        try:
+            qc_conf = float(payload.get("qc_status", {}).get("confidence", 0.0))
+            payload["confidence"] = qc_conf
+            try:
+                from shared.metrics.quality_metrics import quality_metrics
+                quality_metrics.set_response_conf(tenant_id, qc_conf)
+            except Exception:
+                pass
+        except Exception:
+            pass
         self.log.info(f"pipeline: response_len={len(payload.get('response',''))} ctx_used={len(ctx_texts)}")
         # Audit generation
         try:

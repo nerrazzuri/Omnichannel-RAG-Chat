@@ -107,4 +107,99 @@ class EmbeddingService:
             logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
         return None
 
+    # Batch embedding with caching for synonym/column vectors
+    def embed_texts_with_cache(self, texts: List[str], tenant_id: str) -> List[List[float]]:
+        if not texts:
+            return []
+        if not self.client:
+            return [[] for _ in texts]
+        # Prepare cache lookups
+        keys = [self._cache_key(t or "") for t in texts]
+        results: List[Optional[List[float]]] = []
+        to_compute: List[int] = []
+        for i, k in enumerate(keys):
+            cached = redis_cache.get_tenant_key(tenant_id, k)
+            if isinstance(cached, list):
+                results.append(cached)
+                try:
+                    cost_metrics.hit(tenant_id, "emb")
+                except Exception:
+                    pass
+            else:
+                results.append(None)
+                to_compute.append(i)
+                try:
+                    cost_metrics.miss(tenant_id, "emb")
+                except Exception:
+                    pass
+        if not to_compute:
+            return [list(v or []) for v in results]  # type: ignore
+        # Respect circuit breaker (tenant-aware) for batch call
+        if not circuit_breaker.allow("openai_embed", tenant_id):
+            return [list(v or []) for v in results]  # degrade to partial cache hits
+        # Throttling by tenant
+        try:
+            ok = throttle.acquire(tenant_id, kind="embed", tenant_tier=None)
+            if not ok:
+                return [list(v or []) for v in results]
+        except Exception:
+            pass
+        # Perform batch embedding for only the missing indices
+        batch_inputs = [texts[i] for i in to_compute]
+        @retry_with_backoff("openai.embed.batch")
+        def _do_batch() -> List[List[float]]:
+            resp = self.client.embeddings.create(model=self.model, input=batch_inputs)
+            out = []
+            if resp and getattr(resp, 'data', None):
+                for item in resp.data:
+                    vec = getattr(item, 'embedding', [])
+                    out.append(vec if isinstance(vec, list) else [])
+            return out
+        try:
+            batch_vecs = _do_batch()
+            # Record costs (approximate)
+            try:
+                ptoks = int(sum(len((t or "")) for t in batch_inputs) / 4)
+                m = self.model
+                in_rate = float(cost_cfg.model_in_usd_per_1k.get(m, cost_cfg.model_in_usd_per_1k.get("default", 0.0001)))
+                usd = (ptoks / 1000.0) * in_rate
+                cost_metrics.record_tokens(tenant_id, m, "embed", ptoks, 0, usd)
+                rolling_cost.add(tenant_id, m, "embed", ptoks, 0, usd)
+            except Exception:
+                pass
+            for idx, vec in zip(to_compute, batch_vecs):
+                results[idx] = vec
+                try:
+                    redis_cache.set_tenant_key(tenant_id, keys[idx], vec, ttl=1800)
+                except Exception:
+                    pass
+            circuit_breaker.record_success("openai_embed", tenant_id)
+        except Exception as e:  # noqa: BLE001
+            circuit_breaker.record_failure("openai_embed", tenant_id)
+            # enqueue for async retry (best-effort)
+            if hasattr(retries, "queue_enabled") and retries.queue_enabled:
+                try:
+                    retry_queue.enqueue(
+                        job_type="embed_batch",
+                        tenant_id=tenant_id,
+                        payload={"count": len(batch_inputs), "model": self.model},
+                        last_error=str(e),
+                    )
+                except Exception:
+                    pass
+        finally:
+            try:
+                throttle.release(tenant_id, kind="embed")
+            except Exception as e:  # noqa: F841
+                logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
+        # Normalize output length
+        finalized: List[List[float]] = []
+        for v in results:
+            finalized.append(list(v or []))
+        return finalized
+
+    # Backwards-compatible alias expected by some callers
+    def _embed_with_cache(self, texts: List[str], tenant_id: str) -> List[List[float]]:
+        return self.embed_texts_with_cache(texts, tenant_id)
+
 

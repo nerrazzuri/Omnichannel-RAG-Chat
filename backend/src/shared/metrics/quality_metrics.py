@@ -17,12 +17,14 @@ class QualityMetrics:
             self.f1 = Gauge('ai_core_quality_f1', 'F1 score', ['tenant', 'suite'])
             self.reranker_acc = Gauge('ai_core_reranker_accuracy', 'Reranker accuracy', ['tenant'])
             self.intent_conf_avg = Gauge('ai_core_intent_confidence_avg', 'Avg intent confidence', ['tenant'])
+            self.response_conf_avg = Gauge('ai_core_quality_confidence_avg', 'Avg response confidence (QC)', ['tenant'])
         else:
             self.precision = None
             self.recall = None
             self.f1 = None
             self.reranker_acc = None
             self.intent_conf_avg = None
+            self.response_conf_avg = None
 
     def set_eval(self, tenant: str, suite: str, p: float, r: float, f1: float) -> None:
         try:
@@ -41,6 +43,12 @@ class QualityMetrics:
     def set_intent_conf(self, tenant: str, conf: float) -> None:
         try:
             if self.intent_conf_avg: self.intent_conf_avg.labels(tenant=tenant).set(float(conf))
+        except Exception:
+            pass
+
+    def set_response_conf(self, tenant: str, conf: float) -> None:
+        try:
+            if self.response_conf_avg: self.response_conf_avg.labels(tenant=tenant).set(float(conf))
         except Exception:
             pass
 

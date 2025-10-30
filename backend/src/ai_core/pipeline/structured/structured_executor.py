@@ -21,8 +21,14 @@ class StructuredExecutor:
             self._duck = None
         # Simple per-process caches
         self._tenant_conn: Dict[str, Any] = {}
+        self._tenant_conn_ts: Dict[str, float] = {}
         self._syn_cache: Dict[str, Dict[str, List[float]]] = {}
         self._col_list: Dict[str, List[str]] = {}
+        try:
+            from shared.metrics.retrieval_metrics import retrieval_metrics
+            self._ret_metrics = retrieval_metrics
+        except Exception:
+            self._ret_metrics = None
 
     # ------------------------------
     # Public API
@@ -41,7 +47,7 @@ class StructuredExecutor:
                 result = self._run_pandas(dataframe, parsed, schema_info, synmap, context)
             return result
         except Exception as e:
-            self.log.warning(f"structured executor failed: {e}")
+            self.log.exception("[structured.execute] failed", extra={"module_name": __name__})
             return None
 
     # ------------------------------
@@ -104,8 +110,9 @@ class StructuredExecutor:
         try:
             from ai_core.pipeline.embedding.embedding_service import EmbeddingService
             emb = EmbeddingService()
-            vecs = emb._embed_with_cache(cols)  # type: ignore
-        except Exception:
+            vecs = emb._embed_with_cache(cols, tenant)  # type: ignore[arg-type]
+        except Exception as e:
+            self.log.exception("[structured.synonyms] embed error", extra={"tenant_id": tenant})
             vecs = [[0.0] * 16 for _ in cols]
         syns: Dict[str, List[float]] = {}
         for c, v in zip(cols, vecs):
@@ -182,10 +189,50 @@ class StructuredExecutor:
 
     def _run_duckdb(self, df, parsed: Dict[str, Any], schema_info: Dict[str, Any], synmap: Dict[str, List[str]], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         tenant = str(context.get("tenant_id", "default"))
+        # Aging policy for per-tenant connections
+        import time
+        from shared.config.tuning import retrieval as retr_cfg
+        # Close stale connections
+        try:
+            ttl = int(getattr(retr_cfg, 'duckdb_conn_ttl_s', 900))
+            max_conns = int(getattr(retr_cfg, 'duckdb_max_conns', 16))
+        except Exception:
+            ttl = 900
+            max_conns = 16
+        now = time.time()
+        for t_id, ts in list(self._tenant_conn_ts.items()):
+            if (now - float(ts)) > ttl:
+                try:
+                    c = self._tenant_conn.get(t_id)
+                    if c:
+                        c.close()
+                except Exception:
+                    pass
+                finally:
+                    self._tenant_conn.pop(t_id, None)
+                    self._tenant_conn_ts.pop(t_id, None)
+        # Enforce max pool size by evicting oldest
+        if len(self._tenant_conn) >= max_conns and tenant not in self._tenant_conn:
+            try:
+                oldest_t = sorted(self._tenant_conn_ts.items(), key=lambda x: x[1])[0][0]
+                oc = self._tenant_conn.get(oldest_t)
+                if oc:
+                    oc.close()
+            except Exception:
+                pass
+            finally:
+                self._tenant_conn.pop(oldest_t, None)
+                self._tenant_conn_ts.pop(oldest_t, None)
         conn = self._tenant_conn.get(tenant)
         if conn is None:
             conn = self._duck.connect()
             self._tenant_conn[tenant] = conn
+        self._tenant_conn_ts[tenant] = now
+        try:
+            if self._ret_metrics:
+                self._ret_metrics.set_duckdb_active(tenant, len(self._tenant_conn))
+        except Exception:
+            pass
         conn.register("t", df)
         op = parsed["operation"]
         where_sql, params = self._build_where(parsed, schema_info, synmap)
