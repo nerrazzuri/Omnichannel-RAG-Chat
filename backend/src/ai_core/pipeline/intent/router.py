@@ -302,6 +302,15 @@ class HybridContextualRouter:
         return mapping.get(l, l if l in mapping.values() else None)
 
     # ---------- Utilities ----------
+    @staticmethod
+    def _best_source(rule_score: float, emb_score: float, ctx_score: float, model_score: float) -> str:
+        try:
+            pairs = [("rule", float(rule_score or 0.0)), ("embedding", float(emb_score or 0.0)), ("context", float(ctx_score or 0.0)), ("model", float(model_score or 0.0))]
+            best = max(pairs, key=lambda x: x[1])
+            # If all zero, return "rule" as default
+            return best[0] if best[1] > 0.0 else "rule"
+        except Exception:
+            return "rule"
     def _load_tenant_catalog(self, tenant_id: str) -> Dict[str, List[str]]:
         # For now, load from default; could read DB/JSON in future
         cached = self._tenant_cache.get(tenant_id)
