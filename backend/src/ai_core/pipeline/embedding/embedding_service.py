@@ -103,8 +103,8 @@ class EmbeddingService:
         finally:
             try:
                 throttle.release(tenant_id, kind="embed")
-        except Exception as e:
-            logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
+            except Exception as e:
+                logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
         return None
 
     # Batch embedding with caching for synonym/column vectors

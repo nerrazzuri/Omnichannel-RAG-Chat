@@ -353,16 +353,14 @@ async def health_check():
 @app.get("/v1/ready")
 async def ready_check():
     from shared.cache.redis import redis_cache
-    from shared.database.session import SessionLocal
+    from shared.database.session import engine
+    from sqlalchemy import text as _sql_text
     ok_db = False
     ok_redis = False
     try:
-        s = SessionLocal()
-        try:
-            s.execute("SELECT 1")
+        with engine.connect() as conn:
+            conn.execute(_sql_text("SELECT 1"))
             ok_db = True
-        finally:
-            s.close()
     except Exception:
         ok_db = False
     try:

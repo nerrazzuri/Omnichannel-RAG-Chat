@@ -26,7 +26,7 @@ rag_pipeline = RAGPipeline()
 
 
 @router.post("/query", response_model=QueryResponse)
-def post_query(payload: QueryRequest, claims=Depends(require("retrieval:read", resource={"classification":"internal"})), db: Session = Depends(get_db), request: Request | None = None) -> QueryResponse:
+def post_query(payload: QueryRequest, request: Request, claims=Depends(require("retrieval:read", resource={"classification":"internal"})), db: Session = Depends(get_db)) -> QueryResponse:
     if not payload.tenant_id or not payload.message or not payload.channel:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

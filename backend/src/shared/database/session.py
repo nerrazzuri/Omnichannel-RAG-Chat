@@ -101,7 +101,7 @@ _initialized = False
 
 def get_db() -> Session:
     """Get database session."""
-    global _initialized
+    global _initialized, engine, SessionLocal  # noqa: PLW0603
     if not _initialized:
         try:
             _ensure_sqlite_migrations()
@@ -115,7 +115,6 @@ def get_db() -> Session:
             db.execute(text("SELECT 1"))
         except Exception:
             # Attempt to recreate engine and session on failure
-            global engine, SessionLocal  # noqa: PLW0603
             try:
                 engine.dispose()
             except Exception:
