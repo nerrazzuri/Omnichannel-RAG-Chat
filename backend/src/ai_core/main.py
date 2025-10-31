@@ -66,6 +66,34 @@ app_logger = logging.getLogger(__name__)
 # Correlation ID middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid as _uuid
+# Initialize Vault secrets BEFORE importing auth middleware (which reads JWT at import)
+try:
+    from shared.config.tuning import vault as vault_cfg
+    if vault_cfg.enabled:
+        from shared.security.vault_client import vault_client
+        from shared.security.secret_manager import secret_manager
+        # Load all under ai_core path and start background refresh
+        loaded = vault_client.load_all()
+        vault_client.start_refresh()
+        # Map a few critical secrets into environment so early imports see them
+        for key in ("JWT_SECRET", "OPENAI_API_KEY", "DB_PASSWORD", "QDRANT_API_KEY", "REDIS_PASSWORD", "ADMIN_UPLOAD_BEARER"):
+            val = loaded.get(key) if isinstance(loaded, dict) else None
+            if not val:
+                # Try individual fetch
+                val = vault_client.get_secret(key)
+            if val:
+                os.environ[key] = str(val)
+            else:
+                # In non-dev, fail fast if critical secret missing
+                if os.getenv("ENV", "dev").lower() not in ("dev", "local", "test"):
+                    raise RuntimeError(f"Missing required secret from Vault: {key}")
+except Exception as _e:
+    # If Vault enabled but fetch failed in prod, abort startup
+    if os.getenv("ENV", "dev").lower() not in ("dev", "local", "test") and os.getenv("VAULT_ENABLED", "false").lower() in ("1","true","yes"):
+        raise
+    app_logger = logging.getLogger(__name__)
+    app_logger.warning(f"Vault initialization skipped/fallback: {_e}")
+
 from ai_core.api.middleware.access import AccessControlMiddleware
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):

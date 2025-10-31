@@ -297,3 +297,21 @@ class MemoryConfig:
 
 memory = MemoryConfig()
 
+
+# ------------------------------
+# Vault / Secret Manager Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class VaultConfig:
+    enabled: bool = os.getenv("VAULT_ENABLED", "false").lower() in ("1", "true", "yes")
+    addr: str = os.getenv("VAULT_ADDR", "")
+    token: str = os.getenv("VAULT_TOKEN", "")
+    mount_path: str = os.getenv("VAULT_MOUNT_PATH", "secret/data/ai_core")  # KVv2: secret/data/<path>
+    refresh_interval_s: int = _get_int("VAULT_REFRESH_INTERVAL_S", 600)
+    cache_ttl_s: int = _get_int("VAULT_CACHE_TTL_S", 600)
+    system_tenant_id: str = os.getenv("VAULT_SYSTEM_TENANT_ID", "00000000-0000-0000-0000-000000000001")
+
+
+vault = VaultConfig()
+

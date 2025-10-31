@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import threading
+import time
+from typing import Dict, Optional
+from urllib import request as _req, error as _err
+
+from shared.config.tuning import vault as vault_cfg
+from shared.metrics.vault_metrics import vault_metrics
+
+
+_logger = logging.getLogger(__name__)
+
+
+def _h(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+class VaultClient:
+    """Minimal Vault KV v2 client with in-memory caching and background refresh.
+
+    Expects VAULT_MOUNT_PATH like 'secret/data/ai_core'. Keys are fetched as
+    mount_path + '/' + key (e.g., 'secret/data/ai_core/OPENAI_API_KEY').
+    """
+
+    def __init__(self) -> None:
+        self.enabled = bool(vault_cfg.enabled and vault_cfg.addr and vault_cfg.token and vault_cfg.mount_path)
+        self.addr = vault_cfg.addr.rstrip('/')
+        self.token = vault_cfg.token
+        self.mount_path = vault_cfg.mount_path.strip('/')
+        self.cache_ttl = max(1, int(vault_cfg.cache_ttl_s))
+        self.refresh_interval = max(1, int(vault_cfg.refresh_interval_s))
+        self._cache: Dict[str, Dict[str, object]] = {}
+        self._lock = threading.RLock()
+        self._stop = False
+        self._refresh_thread: Optional[threading.Thread] = None
+
+    def start_refresh(self) -> None:
+        if not self.enabled:
+            return
+        if self._refresh_thread and self._refresh_thread.is_alive():
+            return
+        self._refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
+        self._refresh_thread.start()
+
+    def stop_refresh(self) -> None:
+        self._stop = True
+
+    def _refresh_loop(self) -> None:
+        while not self._stop:
+            time.sleep(self.refresh_interval)
+            try:
+                with self._lock:
+                    keys = list(self._cache.keys())
+                for key in keys:
+                    try:
+                        _ = self._fetch_remote(key, force=True)
+                    except Exception as e:
+                        _logger.warning("[vault.refresh] failed", extra={"key": key, "err": str(e)})
+            except Exception:
+                pass
+
+    def load_all(self, prefix: str = "") -> Dict[str, str]:
+        """Fetch all keys under mount_path/prefix; KVv2 returns a JSON dict."""
+        if not self.enabled:
+            return {}
+        # For KVv2, reading a 'folder' returns data dict only if stored as a single doc
+        # We assume secrets are stored as a single JSON under mount_path (e.g., secret/data/ai_core)
+        path = self.mount_path
+        if prefix:
+            path = f"{path}/{prefix.strip('/')}"
+        try:
+            url = f"{self.addr}/v1/{path}"
+            req = _req.Request(url, headers={"X-Vault-Token": self.token})
+            with _req.urlopen(req, timeout=5) as resp:
+                body = resp.read()
+                obj = json.loads(body.decode("utf-8"))
+                data = ((obj or {}).get("data") or {}).get("data") or {}
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if isinstance(v, str):
+                            self._remember(k, v)
+                    vault_metrics.inc_fetch_success()
+                    return {k: str(v) for k, v in data.items() if isinstance(v, str)}
+                vault_metrics.inc_fetch_failure("decode")
+                return {}
+        except _err.HTTPError as e:
+            vault_metrics.inc_fetch_failure("http")
+            _logger.error("[vault.load_all] http error %s", e.code)
+            return {}
+        except Exception as e:
+            vault_metrics.inc_fetch_failure("other")
+            _logger.error("[vault.load_all] error: %s", str(e))
+            return {}
+
+    def get_secret(self, key: str) -> Optional[str]:
+        if not self.enabled:
+            return None
+        # cache
+        with self._lock:
+            ent = self._cache.get(key)
+            if ent and (time.time() - float(ent.get("ts", 0))) < self.cache_ttl:
+                vault_metrics.inc_cache_hit()
+                return str(ent.get("val"))
+        # remote fetch
+        try:
+            return self._fetch_remote(key)
+        except Exception as e:
+            vault_metrics.inc_fetch_failure("other")
+            _logger.error("[vault.get_secret] error for key %s: %s", key, str(e))
+            return None
+
+    def _fetch_remote(self, key: str, force: bool = False) -> Optional[str]:
+        path = f"{self.mount_path}/{key.strip('/')}"
+        url = f"{self.addr}/v1/{path}"
+        req = _req.Request(url, headers={"X-Vault-Token": self.token})
+        with _req.urlopen(req, timeout=5) as resp:
+            body = resp.read()
+            obj = json.loads(body.decode("utf-8"))
+            data = ((obj or {}).get("data") or {}).get("data") or {}
+            val = data.get(key) if key in data else data.get("value")
+            if val is None and isinstance(data, dict) and key in data:
+                val = data[key]
+            if isinstance(val, (str, int)):
+                sval = str(val)
+                prev_hash = None
+                with self._lock:
+                    old = self._cache.get(key)
+                    if old:
+                        prev_hash = str(old.get("hash"))
+                self._remember(key, sval)
+                if prev_hash and prev_hash != _h(sval):
+                    vault_metrics.inc_rotation(_h(key))
+                vault_metrics.inc_fetch_success()
+                return sval
+            vault_metrics.inc_fetch_failure("decode")
+            return None
+
+    def _remember(self, key: str, value: str) -> None:
+        with self._lock:
+            self._cache[key] = {"val": value, "hash": _h(value), "ts": time.time()}
+
+
+# Global instance
+vault_client = VaultClient()
+
+

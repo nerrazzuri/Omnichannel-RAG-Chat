@@ -4,6 +4,8 @@ import hashlib
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 from shared.database.models import AuditLog
+from shared.config.tuning import vault as vault_cfg
+from shared.metrics.vault_metrics import vault_metrics
 
 
 def _h(text: str) -> str:
@@ -91,4 +93,35 @@ def write_audit(
         except Exception as e2:
             logging.getLogger(__name__).exception("[audit.rollback] error", extra={"tenant_id": tenant_id})
 
+
+
+def write_vault_audit(key_name: str, correlation_id: Optional[str] = None) -> None:
+    """Record a vault.fetch event via retry queue (no DB requirement)."""
+    try:
+        from shared.queue.retry_queue import retry_queue
+        payload = {
+            "tenant_id": vault_cfg.system_tenant_id,
+            "user_id": None,
+            "action": "vault.fetch",
+            "resource": "vault",
+            "request_hash": _h(key_name),
+            "response_hash": _h("ok"),
+            "success": True,
+            "latency_ms": 0,
+            "model": None,
+            "token_input": None,
+            "token_output": None,
+            "category": "security",
+            "auth_type": None,
+            "api_key_id": None,
+            "correlation_id": correlation_id,
+            "classification": None,
+            "origin": None,
+            "extra": {},
+        }
+        retry_queue.enqueue("audit_log", vault_cfg.system_tenant_id, payload)
+        vault_metrics.inc_audit_event()
+    except Exception:
+        # best-effort only
+        pass
 
