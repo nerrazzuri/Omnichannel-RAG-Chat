@@ -68,13 +68,21 @@ class RAGPipeline:
         t_start = time.time()
         if plog:
             plog.emit({"query": query})
-        # 1) Intent classification via Hybrid Router (with conversation context when available)
+        # 1) Memory context: summary + recent turns (if session_id derivable from user/channel)
         conversation_context: List[Dict[str, Any]] = []
+        memory_summary: Optional[str] = None
         try:
             if db and user_id:
-                from ai_core.services.conversation_service import ConversationService
-                conv = ConversationService(db)
-                conversation_context = conv.get_recent_messages_by_ids(tenant_id, user_id, limit=5)
+                # derive a stable session_id from user_id+channel for now
+                import uuid as _uuid
+                sseed = f"{tenant_id}:{user_id}:{channel or 'web'}"
+                session_id = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, sseed))
+                from ai_core.pipeline.memory.memory_service import MemoryService
+                mem = MemoryService(db)
+                mem_ctx = mem.get_context(tenant_id, session_id)
+                memory_summary = mem_ctx.get("summary")
+                # represent recent turns as pseudo-context for intent routing
+                conversation_context = [{"role": t.split(":",1)[0], "text": t.split(":",1)[1] if ":" in t else t} for t in mem_ctx.get("recent_turns", [])]
         except Exception as e:
             logger.exception("[rag.context] fetch error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
             conversation_context = []
@@ -190,6 +198,23 @@ class RAGPipeline:
                 self.log.warning("structured executor path failed; falling back")
 
         ctx_texts = self.context_builder.build(reranked_docs)
+        # Prepend memory summary and recent exchanges to context (lightweight)
+        memory_block: List[str] = []
+        if memory_summary:
+            memory_block.append(f"Previous summary:\n{memory_summary}")
+        if conversation_context:
+            try:
+                pairs = []
+                for rc in conversation_context[-5:]:
+                    role = rc.get("role") or "user"
+                    text = rc.get("text") or ""
+                    pairs.append(f"{role.capitalize()}: {text}")
+                if pairs:
+                    memory_block.append("Recent exchanges:\n" + "\n".join(pairs))
+            except Exception:
+                pass
+        if memory_block:
+            ctx_texts = memory_block + ctx_texts
         # Build structured snippets with S# IDs and enrich with provenance when available
         structured_snippets = []
         try:
@@ -287,6 +312,19 @@ class RAGPipeline:
                 "contextual_trigger": decision.contextual_trigger,
                 "tenant_overrides_used": decision.tenant_overrides_used,
             }
+        except Exception:
+            pass
+
+        # Persist memory for this turn (user query + assistant reply)
+        try:
+            if db and user_id:
+                import uuid as _uuid
+                sseed = f"{tenant_id}:{user_id}:{channel or 'web'}"
+                session_id = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, sseed))
+                from ai_core.pipeline.memory.memory_service import MemoryService
+                mem = MemoryService(db)
+                mem.append_turn(tenant_id, session_id, "user", query)
+                mem.append_turn(tenant_id, session_id, "assistant", str(payload.get("response", "")))
         except Exception:
             pass
 

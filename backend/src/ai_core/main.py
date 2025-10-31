@@ -304,10 +304,37 @@ async def lifespan(app: FastAPI):
                     stability_metrics.inc_bg_failure("retry_worker")
                     log_and_continue(e, "retry_worker.cost_flush", None, None)
 
+    def _memory_cleanup_loop():
+        app_logger.info("memory cleanup loop started", extra={"module_name": "memory_cleanup", "pid": os.getpid()})
+        from datetime import datetime, timezone
+        from sqlalchemy import text as _sql
+        from shared.metrics.memory_metrics import memory_metrics
+        while not stop_flag["stop"]:
+            try:
+                # run every 5 minutes
+                time.sleep(300)
+                s = SessionLocal()
+                try:
+                    rows = s.execute(_sql("DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < now() RETURNING tenant_id")).fetchall()
+                    # count by tenant
+                    tenant_counts = {}
+                    for r in rows:
+                        tid = str(r[0])
+                        tenant_counts[tid] = tenant_counts.get(tid, 0) + 1
+                    for tid, c in tenant_counts.items():
+                        memory_metrics.add_cleanup(tid, c)
+                finally:
+                    s.close()
+            except Exception as e:
+                stability_metrics.inc_bg_failure("memory_cleanup")
+                log_and_continue(e, "memory.cleanup", None, None)
+
     t1 = threading.Thread(target=_qdrant_health_loop, daemon=True)
     t2 = threading.Thread(target=_retry_worker_loop, daemon=True)
+    t3 = threading.Thread(target=_memory_cleanup_loop, daemon=True)
     t1.start()
     t2.start()
+    t3.start()
 
     # Start connector scheduler if enabled
     scheduler_thread = None

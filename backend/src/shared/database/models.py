@@ -299,3 +299,18 @@ class EvalRun(Base):
     meta = Column(JSON, default=dict)
 
 Index("idx_eval_tenant_started", EvalRun.tenant_id, EvalRun.started_at)
+
+
+class ConversationMemory(Base):
+    __tablename__ = "conversation_memory"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    session_id = Column(GUID(), nullable=False)
+    role = Column(String(16), nullable=False)  # user | assistant
+    content = Column(Text, nullable=False)
+    summary = Column(Text)
+    created_at = Column(DateTime, default=func.now(), index=True)
+    expires_at = Column(DateTime)
+
+Index("idx_mem_tenant_session_created", ConversationMemory.tenant_id, ConversationMemory.session_id, ConversationMemory.created_at)
