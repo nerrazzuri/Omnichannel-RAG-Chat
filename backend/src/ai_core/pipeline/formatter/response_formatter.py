@@ -45,18 +45,20 @@ class ResponseFormatter:
                 continue
             doc = snip.get("doc") or {}
             citations.append({
-                "id": sid,
+                "source": doc.get("source_url") or doc.get("id") or sid,
                 "title": doc.get("title") or snip.get("source_label") or sid,
-                "source_url": doc.get("source_url"),
+                "relevance": snip.get("score") or snip.get("relevance") or 0.0,
+                "snippet": (snip.get("text") or "")[:400],
             })
         # If none found, include up to first 3 snippets as best-effort
         if not citations:
             for s in norm_ctx[:3]:
                 doc = s.get("doc") or {}
                 citations.append({
-                    "id": s.get("id"),
+                    "source": doc.get("source_url") or doc.get("id") or s.get("id"),
                     "title": doc.get("title") or s.get("source_label"),
-                    "source_url": doc.get("source_url"),
+                    "relevance": s.get("score") or s.get("relevance") or 0.0,
+                    "snippet": (s.get("text") or "")[:400],
                 })
         payload = {
             "response": generated_text,

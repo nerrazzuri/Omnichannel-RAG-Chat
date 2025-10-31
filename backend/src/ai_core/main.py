@@ -255,7 +255,7 @@ async def lifespan(app: FastAPI):
                             key = f"p_{c}"
                             params[key] = field_map[c]
                             cast = casts.get(c, "")
-                            placeholders.append(f"%({key})s{cast}")
+                            placeholders.append(f":{key}{cast}")
                         col_list = ", ".join(insert_cols + ["created_at"]) if ("created_at" not in insert_cols) else ", ".join(insert_cols)
                         val_list = ", ".join(placeholders + (["now()"] if "created_at" not in insert_cols else []))
                         sql = _sql(f"INSERT INTO audit_log ({col_list}) VALUES ({val_list})")
@@ -278,10 +278,17 @@ async def lifespan(app: FastAPI):
                         s = _SL()
                         try:
                             from shared.database.models import CostSummary as _CS
+                            import uuid as _uuidmod
+                            def _clean_uuid(val):
+                                try:
+                                    return str(_uuidmod.UUID(str(val)))
+                                except Exception:
+                                    return None
                             for (tenant, model, kind), (tin, tout, usd) in snap.items():
                                 cents = int(round(usd * 100.0))
+                                tenant_uuid = _clean_uuid(tenant) or "00000000-0000-0000-0000-000000000001"
                                 rec = _CS(
-                                    tenant_id=tenant,
+                                    tenant_id=tenant_uuid,
                                     model=model,
                                     kind=kind,
                                     tokens_in=int(tin),
