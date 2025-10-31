@@ -2,6 +2,7 @@ from typing import Dict, Any, List
 import re
 
 from ai_core.pipeline.llm.llm_client import LLMClient
+from shared.utils.text_normalize import normalize_multiline_text
 
 
 class ResponseFormatter:
@@ -31,6 +32,8 @@ class ResponseFormatter:
         # Fallback preview uses first snippet text
         first_text = str(norm_ctx[0].get("text", "")) if norm_ctx else ""
         generated_text = (gen.get("text") or "").strip() or (first_text[:300] if first_text else "")
+        # Normalize multi-line formatting and preserve newlines for frontend rendering
+        generated_text = normalize_multiline_text(generated_text)
         # Parse [S#] tokens from model output and map to provenance
         id_to_ctx = {str(s.get("id")): s for s in norm_ctx if isinstance(s, dict) and s.get("id")}
         found_ids = [m.group(1) for m in re.finditer(r"\[(S\d+)\]", generated_text)]
@@ -62,6 +65,7 @@ class ResponseFormatter:
                 })
         payload = {
             "response": generated_text,
+            "final_response": generated_text,
             "citations": citations,
             "confidence": 0.0,
             "requiresHuman": False if contexts else True,

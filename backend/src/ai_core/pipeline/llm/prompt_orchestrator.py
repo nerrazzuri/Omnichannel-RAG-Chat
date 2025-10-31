@@ -13,9 +13,14 @@ class PromptOrchestrator:
     def _build_templates(self) -> Dict[str, str]:
         cite_line = "Include brief source markers if available." if self.include_sources else ""
         preface = "Answer based only on provided context. Do not hallucinate. " + cite_line
+        formatting = (
+            "\nWhen your answer includes multiple items, steps, or recommendations, format them as a numbered or bullet-point list.\n"
+            "Each point must start on a new line and be clearly separated.\n"
+            "Example:\n1. Step one\n2. Step two\n3. Step three\n\n"
+        )
         base = (
             "You are Omni, a precise enterprise assistant.\n"
-            + preface
+            + preface + formatting
             + "\n\n{structured_block}---\nCONTEXT:\n{context}\n---\nQUESTION:\n{question}\n---\n"
         )
         t_lookup = base + "Provide a short, direct answer first."
