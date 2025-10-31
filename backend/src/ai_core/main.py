@@ -315,14 +315,27 @@ async def lifespan(app: FastAPI):
                 time.sleep(300)
                 s = SessionLocal()
                 try:
-                    rows = s.execute(_sql("DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < now() RETURNING tenant_id")).fetchall()
-                    # count by tenant
-                    tenant_counts = {}
-                    for r in rows:
-                        tid = str(r[0])
-                        tenant_counts[tid] = tenant_counts.get(tid, 0) + 1
-                    for tid, c in tenant_counts.items():
-                        memory_metrics.add_cleanup(tid, c)
+                    dialect = getattr(getattr(s, "bind", None), "dialect", None)
+                    name = getattr(dialect, "name", "") if dialect else ""
+                    if name == "sqlite":
+                        # estimate count then delete (no RETURNING)
+                        cnt = s.execute(_sql("SELECT COUNT(1) FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP")).scalar() or 0
+                        s.execute(_sql("DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP"))
+                        s.commit()
+                        try:
+                            memory_metrics.add_cleanup_sqlite("global", int(cnt))
+                        except Exception:
+                            pass
+                    else:
+                        rows = s.execute(_sql("DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < now() RETURNING tenant_id")).fetchall()
+                        s.commit()
+                        # count by tenant
+                        tenant_counts = {}
+                        for r in rows:
+                            tid = str(r[0])
+                            tenant_counts[tid] = tenant_counts.get(tid, 0) + 1
+                        for tid, c in tenant_counts.items():
+                            memory_metrics.add_cleanup(tid, c)
                 finally:
                     s.close()
             except Exception as e:

@@ -73,9 +73,11 @@ class RAGPipeline:
         memory_summary: Optional[str] = None
         try:
             if db and user_id:
-                # derive a stable session_id from user_id+channel for now
+                # derive a stable session_id from user_id+channel + day bucket
                 import uuid as _uuid
-                sseed = f"{tenant_id}:{user_id}:{channel or 'web'}"
+                from datetime import datetime, timezone
+                day = datetime.now(timezone.utc).strftime('%Y%m%d')
+                sseed = f"{tenant_id}:{user_id}:{channel or 'web'}:{day}"
                 session_id = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, sseed))
                 from ai_core.pipeline.memory.memory_service import MemoryService
                 mem = MemoryService(db)
@@ -319,7 +321,9 @@ class RAGPipeline:
         try:
             if db and user_id:
                 import uuid as _uuid
-                sseed = f"{tenant_id}:{user_id}:{channel or 'web'}"
+                from datetime import datetime, timezone
+                day = datetime.now(timezone.utc).strftime('%Y%m%d')
+                sseed = f"{tenant_id}:{user_id}:{channel or 'web'}:{day}"
                 session_id = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, sseed))
                 from ai_core.pipeline.memory.memory_service import MemoryService
                 mem = MemoryService(db)

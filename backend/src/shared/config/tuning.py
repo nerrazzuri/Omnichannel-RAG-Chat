@@ -291,6 +291,8 @@ class MemoryConfig:
     ttl_days: int = _get_int("MEMORY_TTL_DAYS", 7)
     summary_trigger_turns: int = _get_int("MEMORY_SUMMARY_TRIGGER", 5)
     max_context_tokens: int = _get_int("MEMORY_MAX_CONTEXT_TOKENS", 3000)
+    prune_strategy: str = os.getenv("MEMORY_PRUNE_STRATEGY", "oldest").lower()
+    pii_extended: bool = os.getenv("MEMORY_PII_EXTENDED", "false").lower() in ("1", "true", "yes")
 
 
 memory = MemoryConfig()
