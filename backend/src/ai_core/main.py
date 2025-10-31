@@ -209,8 +209,15 @@ async def lifespan(app: FastAPI):
                         # Discover available columns for backward-compat inserts
                         cols = []
                         try:
-                            rows = s.execute(_sql("SELECT column_name FROM information_schema.columns WHERE table_name='audit_log'")).fetchall()
+                            rows = s.execute(
+                                _sql("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='audit_log'")
+                            ).fetchall()
                             cols = [r[0] for r in rows]
+                            if not cols:
+                                rows2 = s.execute(
+                                    _sql("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log'")
+                                ).fetchall()
+                                cols = [r[0] for r in rows2]
                         except Exception:
                             cols = []
                         now_id = str(_uuidmod.uuid4())
@@ -235,8 +242,11 @@ async def lifespan(app: FastAPI):
                             "token_output": payload.get("token_output"),
                             "extra": payload.get("extra") or {},
                         }
-                        # Filter to existing columns only
-                        insert_cols = [c for c in field_map.keys() if (not cols) or (c in cols)]
+                        # Filter to existing columns only; if unknown, exclude optional fields like api_key_id
+                        if cols:
+                            insert_cols = [c for c in field_map.keys() if c in cols]
+                        else:
+                            insert_cols = [c for c in field_map.keys() if c != "api_key_id"]
                         # Build parameterized INSERT
                         placeholders = []
                         params = {}
