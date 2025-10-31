@@ -314,3 +314,20 @@ class ConversationMemory(Base):
     expires_at = Column(DateTime)
 
 Index("idx_mem_tenant_session_created", ConversationMemory.tenant_id, ConversationMemory.session_id, ConversationMemory.created_at)
+
+
+class Approval(Base):
+    __tablename__ = "approvals"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    tool_id = Column(String(100), nullable=False)
+    action_payload_hash = Column(String(64), nullable=False)
+    requested_by = Column(GUID())
+    status = Column(String(20), default="pending")  # pending|approved|denied
+    reason = Column(Text)
+    decided_by = Column(GUID())
+    created_at = Column(DateTime, default=func.now(), index=True)
+    decided_at = Column(DateTime)
+
+Index("idx_approvals_tenant_status", Approval.tenant_id, Approval.status, Approval.created_at)

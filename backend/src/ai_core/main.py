@@ -19,6 +19,7 @@ from .api.v1.reranker import router as reranker_router
 from ai_core.api.v1.admin.api_keys import router as apikey_router
 from ai_core.api.v1.admin.rerank import router as rerank_admin_router
 from ai_core.api.v1.feedback import router as feedback_router
+from ai_core.api.v1.agent.approvals import router as approvals_router
 from shared.database.session import create_tables, SessionLocal
 from shared.database.models import Tenant
 import uuid
@@ -504,6 +505,7 @@ app.include_router(reranker_router)
 app.include_router(apikey_router)
 app.include_router(rerank_admin_router)
 app.include_router(feedback_router)
+app.include_router(approvals_router)
 
 if __name__ == "__main__":
     import uvicorn

@@ -277,6 +277,15 @@ class AgentConfig:
     max_tokens_reasoning: int = _get_int("AGENT_MAX_TOKENS_REASONING", 4000)
     time_budget_ms: int = _get_int("AGENT_TIME_BUDGET_MS", 20000)
     sandbox_mode: bool = os.getenv("AGENT_SANDBOX", "true").lower() in ("1", "true", "yes")
+    sandbox_feature_flag: bool = os.getenv("AGENT_SANDBOX_ENABLED", "true").lower() in ("1", "true", "yes")
+    tool_default_timeout_ms: int = _get_int("AGENT_TOOL_DEFAULT_TIMEOUT_MS", 15000)
+    tool_retry_max: int = _get_int("AGENT_TOOL_RETRY_MAX", 2)
+    tool_retry_backoff_ms: int = _get_int("AGENT_TOOL_RETRY_BACKOFF_MS", 300)
+    rate_limit_qps_global: int = _get_int("AGENT_RATE_LIMIT_QPS_GLOBAL", 3)
+    rate_limit_qps_per_tool: int = _get_int("AGENT_RATE_LIMIT_QPS_PER_TOOL", 2)
+    require_approval_for_external_domains: bool = os.getenv("AGENT_REQUIRE_APPROVAL_EXTERNAL", "true").lower() in ("1","true","yes")
+    sql_allowlist_enabled: bool = os.getenv("AGENT_SQL_ALLOWLIST_ENABLED", "true").lower() in ("1","true","yes")
+    file_export_allowed_buckets: str = os.getenv("AGENT_FILE_EXPORT_ALLOWED_BUCKETS", "tenant-${id}/")
 
 
 agents = AgentConfig()
