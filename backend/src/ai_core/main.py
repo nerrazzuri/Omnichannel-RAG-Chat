@@ -255,7 +255,8 @@ async def lifespan(app: FastAPI):
                             key = f"p_{c}"
                             params[key] = field_map[c]
                             cast = casts.get(c, "")
-                            placeholders.append(f":{key}{cast}")
+                            # wrap bind in parentheses so SQLAlchemy recognizes it and Postgres cast applies cleanly
+                            placeholders.append(f"(:{key}){cast}")
                         col_list = ", ".join(insert_cols + ["created_at"]) if ("created_at" not in insert_cols) else ", ".join(insert_cols)
                         val_list = ", ".join(placeholders + (["now()"] if "created_at" not in insert_cols else []))
                         sql = _sql(f"INSERT INTO audit_log ({col_list}) VALUES ({val_list})")
