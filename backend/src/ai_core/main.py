@@ -37,6 +37,8 @@ from shared.config.tuning import connectors as connectors_cfg
 from shared.metrics.stability_metrics import stability_metrics
 from shared.utils.log_and_continue import log_and_continue
 from shared.metrics.exception_metrics import exception_metrics
+from shared.metrics.vault_rotation_metrics import vault_rotation_metrics
+from shared.config.tuning import vault_rotation as vault_rot_cfg
 
 # Optional Sentry init
 try:
@@ -406,10 +408,38 @@ async def lifespan(app: FastAPI):
             stability_metrics.inc_bg_failure("approval_worker")
             log_and_continue(e, "agent.approval_worker", None, None)
     t4 = threading.Thread(target=_approval_loop, daemon=True)
+    # Vault token renewal loop
+    def _vault_renewal_loop():
+        try:
+            from shared.security.vault_client import vault_client as _vc
+            while not stop_flag["stop"]:
+                try:
+                    ttl = _vc.lookup_token_ttl()
+                    if ttl is not None:
+                        vault_rotation_metrics.set_ttl(ttl)
+                        if ttl < max(60, vault_rot_cfg.ttl_alert_threshold_s):
+                            vault_rotation_metrics.inc_alert()
+                            app_logger.warning(f"Vault token TTL low: {ttl}s")
+                            if _vc.renew_token():
+                                vault_rotation_metrics.inc_renew_ok()
+                            else:
+                                vault_rotation_metrics.inc_renew_fail()
+                        # verify secret access still works
+                        if _vc.get_secret("JWT_SECRET") is not None:
+                            vault_rotation_metrics.inc_verify_ok()
+                        else:
+                            vault_rotation_metrics.inc_verify_fail()
+                except Exception as e:
+                    log_and_continue(e, "vault.renewal", None, None)
+                time.sleep(max(5, vault_rot_cfg.token_renew_interval_s))
+        except Exception as e:
+            log_and_continue(e, "vault.renewal.init", None, None)
+    t5 = threading.Thread(target=_vault_renewal_loop, daemon=True)
     t1.start()
     t2.start()
     t3.start()
     t4.start()
+    t5.start()
 
     # Start connector scheduler if enabled
     scheduler_thread = None

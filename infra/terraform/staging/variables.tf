@@ -36,3 +36,19 @@ variable "image_gateway" {
 }
 
 
+variable "k8s_host" {
+  type        = string
+  description = "Kubernetes API server URL"
+}
+
+variable "k8s_sa_jwt" {
+  type        = string
+  description = "Service account JWT for Vault Kubernetes auth"
+  sensitive   = true
+}
+
+variable "k8s_ca_crt" {
+  type        = string
+  description = "Kubernetes cluster CA certificate (PEM)"
+}
+

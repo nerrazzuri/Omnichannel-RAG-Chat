@@ -143,6 +143,36 @@ class VaultClient:
         with self._lock:
             self._cache[key] = {"val": value, "hash": _h(value), "ts": time.time()}
 
+    # --- Token lifecycle helpers ---
+    def lookup_token_ttl(self) -> Optional[int]:
+        if not self.enabled:
+            return None
+        try:
+            url = f"{self.addr}/v1/auth/token/lookup-self"
+            req = _req.Request(url, headers={"X-Vault-Token": self.token}, method="GET")
+            with _req.urlopen(req, timeout=5) as resp:
+                body = resp.read()
+                obj = json.loads(body.decode("utf-8"))
+                ttl = int(((obj or {}).get("data") or {}).get("ttl", 0))
+                return ttl
+        except Exception as e:
+            _logger.error("[vault.token.lookup] error: %s", str(e))
+            return None
+
+    def renew_token(self) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            url = f"{self.addr}/v1/auth/token/renew-self"
+            req = _req.Request(url, headers={"X-Vault-Token": self.token}, data=b"{}")
+            with _req.urlopen(req, timeout=5) as resp:
+                # success renew returns new token data (we keep same client token)
+                _ = resp.read()
+                return True
+        except Exception as e:
+            _logger.error("[vault.token.renew] error: %s", str(e))
+            return False
+
 
 # Global instance
 vault_client = VaultClient()

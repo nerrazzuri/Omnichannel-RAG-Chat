@@ -322,7 +322,14 @@ class VaultConfig:
     system_tenant_id: str = os.getenv("VAULT_SYSTEM_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 
 
+@dataclass(frozen=True)
+class VaultRotationConfig:
+    token_renew_interval_s: int = _get_int("VAULT_TOKEN_RENEW_INTERVAL_S", 300)
+    ttl_alert_threshold_s: int = _get_int("VAULT_TTL_ALERT_THRESHOLD_S", 3600)
+
+
 vault = VaultConfig()
+vault_rotation = VaultRotationConfig()
 
 
 # ------------------------------
