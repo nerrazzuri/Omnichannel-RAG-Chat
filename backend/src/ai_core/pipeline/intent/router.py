@@ -42,6 +42,37 @@ class HybridContextualRouter:
         self._tenant_cache: Dict[str, Dict[str, Any]] = {}
         self._model_cache: Dict[str, Tuple[str, float]] = {}
 
+    def _llm_disambiguate(self, q: str) -> Optional[str]:
+        """Best-effort LLM disambiguation when all signals are weak.
+
+        Returns one of: lookup | summary | compare | aggregate | forecast, or None on failure.
+        """
+        try:
+            # Quick heuristic first to avoid LLM cost
+            intent, score = self._rule_signal(q, self._load_tenant_catalog("default"))
+            if intent:
+                return intent
+            # Fallback to LLM classification prompt via shared LLM client
+            from ai_core.pipeline.llm.llm_client import LLMClient
+            llm = LLMClient()
+            prompt = (
+                "Classify the user query into exactly one of these intents: "
+                "lookup, summary, compare, aggregate, forecast.\n"
+                "Respond with ONLY the label, no extra text."
+            )
+            out = llm.generate(query=prompt, contexts=[q], intent="summary", result_hint=None)
+            text = (out.get("text") or out.get("response") or "").strip().lower()
+            label = text.split()[0] if text else ""
+            mapped = self._map_label(label)
+            return mapped
+        except Exception:
+            # Last resort: embedding proxy
+            try:
+                intent, _ = self._embedding_signal(q, self._load_tenant_catalog("default"))
+                return intent
+            except Exception:
+                return None
+
     # ---------- Public API ----------
     def classify(
         self,
