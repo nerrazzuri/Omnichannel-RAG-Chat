@@ -326,6 +326,8 @@ class VaultConfig:
 class VaultRotationConfig:
     token_renew_interval_s: int = _get_int("VAULT_TOKEN_RENEW_INTERVAL_S", 300)
     ttl_alert_threshold_s: int = _get_int("VAULT_TTL_ALERT_THRESHOLD_S", 3600)
+    renew_backoff_base_s: int = _get_int("VAULT_RENEW_BACKOFF_BASE_S", 5)
+    renew_backoff_max_s: int = _get_int("VAULT_RENEW_BACKOFF_MAX_S", 300)
 
 
 vault = VaultConfig()

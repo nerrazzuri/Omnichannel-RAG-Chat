@@ -412,6 +412,8 @@ async def lifespan(app: FastAPI):
     def _vault_renewal_loop():
         try:
             from shared.security.vault_client import vault_client as _vc
+            failure_streak = 0
+            paused = False
             while not stop_flag["stop"]:
                 try:
                     ttl = _vc.lookup_token_ttl()
@@ -422,8 +424,31 @@ async def lifespan(app: FastAPI):
                             app_logger.warning(f"Vault token TTL low: {ttl}s")
                             if _vc.renew_token():
                                 vault_rotation_metrics.inc_renew_ok()
+                                failure_streak = 0
+                                vault_rotation_metrics.set_failure_streak(failure_streak)
+                                if paused:
+                                    vault_rotation_metrics.inc_resume()
+                                    paused = False
                             else:
                                 vault_rotation_metrics.inc_renew_fail()
+                                failure_streak += 1
+                                vault_rotation_metrics.set_failure_streak(failure_streak)
+                                # apply backoff with jitter
+                                backoff = min(
+                                    vault_rot_cfg.renew_backoff_max_s,
+                                    vault_rot_cfg.renew_backoff_base_s * (2 ** min(6, failure_streak - 1))
+                                )
+                                import random as _rand
+                                sleep_s = backoff + _rand.uniform(0, vault_rot_cfg.renew_backoff_base_s)
+                                if not paused:
+                                    vault_rotation_metrics.inc_pause()
+                                    paused = True
+                                app_logger.warning(f"Vault renew backoff: sleeping {int(sleep_s)}s (streak={failure_streak})")
+                                # early exit check looped per second to honor stop_flag
+                                for _ in range(int(sleep_s)):
+                                    if stop_flag["stop"]:
+                                        break
+                                    time.sleep(1)
                         # verify secret access still works
                         if _vc.get_secret("JWT_SECRET") is not None:
                             vault_rotation_metrics.inc_verify_ok()
@@ -431,7 +456,11 @@ async def lifespan(app: FastAPI):
                             vault_rotation_metrics.inc_verify_fail()
                 except Exception as e:
                     log_and_continue(e, "vault.renewal", None, None)
-                time.sleep(max(5, vault_rot_cfg.token_renew_interval_s))
+                # normal cadence sleep with stop checks each second
+                for _ in range(max(5, vault_rot_cfg.token_renew_interval_s)):
+                    if stop_flag["stop"]:
+                        break
+                    time.sleep(1)
         except Exception as e:
             log_and_continue(e, "vault.renewal.init", None, None)
     t5 = threading.Thread(target=_vault_renewal_loop, daemon=True)
@@ -463,6 +492,11 @@ async def lifespan(app: FastAPI):
     app_logger.info("Shutting down AI Core service...")
     # Cleanup logic here
     stop_flag["stop"] = True
+    try:
+        t5.join(timeout=5)
+        app_logger.info("Vault renewal loop stopped gracefully")
+    except Exception:
+        pass
 
 # Startup model validation & uptime
 _START_TS = None

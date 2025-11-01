@@ -1,0 +1,36 @@
+groups:
+  - name: vault-rotation
+    rules:
+      - alert: VaultTokenTTLWarning
+        expr: vault_token_ttl_seconds < 3600 and vault_token_ttl_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vault token TTL below warning threshold"
+          description: "TTL is {{ $value }}s; renew expected soon."
+      - alert: VaultTokenTTLCritical
+        expr: vault_token_ttl_seconds <= 600
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault token TTL critical"
+          description: "TTL is {{ $value }}s; renewal must occur immediately."
+      - alert: VaultRenewFailureStreak
+        expr: vault_renew_failure_streak >= 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consecutive Vault renew failures"
+          description: "Failure streak {{ $value }} detected; backing off renew attempts."
+      - alert: VaultSecretVerifyFailures
+        expr: increase(vault_secret_verify_failure_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Secret verification failures after renew"
+          description: "Secrets failed to verify after renewal in the last 15m."
+
