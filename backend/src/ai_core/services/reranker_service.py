@@ -233,7 +233,7 @@ class AdvancedReranker:
             self.executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="reranker")
         
         # BM25 cache for fallback
-        from .rag_service import StandardBM25 as _SBM25  # local import to avoid cycles
+        from ai_core.pipeline.fusion.bm25 import StandardBM25 as _SBM25  # updated path
         self._BM25_cls = _SBM25
         self.bm25_cache: Dict[str, _SBM25] = {}
         

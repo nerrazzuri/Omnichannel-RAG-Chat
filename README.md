@@ -60,7 +60,9 @@ See [`.specify/memory/constitution.md`](.specify/memory/constitution.md) for the
 
 4. **Start Development Services**:
    ```bash
-   npm run dev
+   docker-compose up -d ai-core
+   # Open FastAPI docs
+   open http://localhost:8000/docs
    ```
 
 ## 🏗️ Architecture
@@ -78,12 +80,12 @@ The platform follows a microservices architecture with clear separation of conce
 
 ### Technology Stack
 
-- **Backend**: TypeScript/Node.js with NestJS framework
-- **Database**: PostgreSQL with multi-tenant schema design
-- **AI/ML**: LangChain, OpenAI/Azure Cognitive Services
-- **Vector Storage**: Pinecone/Weaviate for production scale
-- **Message Queue**: RabbitMQ for reliable message delivery
-- **Infrastructure**: Kubernetes with Terraform IaC
+- **Backend**: Python FastAPI (AI-Core)
+- **Database**: PostgreSQL with multi-tenant isolation
+- **AI/ML**: OpenAI models (gpt-4o-mini by default), custom RAG pipeline
+- **Vector Storage**: Qdrant
+- **Cache/Queue**: Redis
+- **Infrastructure**: Docker / Kubernetes
 
 See [`docs/architecture-guide.md`](docs/architecture-guide.md) for detailed implementation guidance.
 
@@ -129,18 +131,12 @@ The project uses a structured development workflow:
 
 ## 🔒 Security & Compliance
 
-### Security Measures
+### Security Practices
 
-- End-to-end encryption for all communications
-- Comprehensive audit logging for compliance
-- Regular security assessments and penetration testing
-- Automated dependency vulnerability scanning
-
-### Compliance Frameworks
-
-- **SOC2**: Security and availability controls
-- **GDPR**: Data protection and privacy compliance
-- **HIPAA**: Healthcare data protection (when applicable)
+- JWT hardening: rejects weak secrets (<32 chars) outside dev
+- CORS restricted by `ALLOW_ORIGINS` (wildcard only in dev)
+- Secrets via `.env` (see `.env.example`); never commit `.env`
+- Audit logging for retrieval, generation, and agent actions
 
 ## 📊 Monitoring & Observability
 

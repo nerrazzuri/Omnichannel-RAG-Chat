@@ -14,10 +14,15 @@ class JWTService:
     """JWT token service with multi-tenant support."""
 
     def __init__(self):
-        self.secret_key = os.getenv("JWT_SECRET", "your-jwt-secret-key-minimum-32-characters")
+        self.secret_key = os.getenv("JWT_SECRET", "")
         self.algorithm = "HS256"
         self.access_token_expire_minutes = int(os.getenv("JWT_EXPIRES_MINUTES", "60"))
         self.refresh_token_expire_days = 7
+        # Enforce strong secret in non-dev environments
+        env = os.getenv("ENV", "dev").lower()
+        if env not in ("dev", "local", "test"):
+            if not self.secret_key or len(self.secret_key) < 32:
+                raise ValueError("JWT_SECRET too weak; must be >= 32 chars")
 
     def create_access_token(
         self,

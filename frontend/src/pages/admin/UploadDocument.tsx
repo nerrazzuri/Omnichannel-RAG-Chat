@@ -5,6 +5,9 @@ export default function UploadDocument() {
   const [content, setContent] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState('');
+  // TEMP: Hardcoded admin bearer token for testing uploads via /admin/UploadDocuments
+  // Remove after wiring real auth.
+  const ADMIN_TEST_TOKEN = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiVVNFUl9JRCIsInRlbmFudF9pZCI6IlRFTkFOVF9JRCIsInVzZXJfdHlwZSI6IklOVEVSTkFMX1NUQUZGIiwicm9sZSI6IkFETUlOIiwiZXhwIjoxNzYxNjY0NjgzLCJpYXQiOjE3NjE2NjEwODMsInR5cGUiOiJhY2Nlc3MiLCJpc3MiOiJvbW5pY2hhbm5lbC1jaGF0Ym90In0.tpxS-P92fc2E0uj30r64GprntZ7BnAb5Pad-K0C-8xQ';
 
   const uploadJson = async () => {
     setStatus('');
@@ -28,7 +31,8 @@ export default function UploadDocument() {
       form.append('knowledgeBaseId', '00000000-0000-0000-0000-000000000000');
       form.append('title', title || file.name);
       form.append('file', file);
-      const res = await fetch('/api/tenant/upload_file', { method: 'POST', body: form });
+      // Pass token via querystring for the proxy to forward
+      const res = await fetch(`/api/tenant/upload_file?token=${encodeURIComponent(ADMIN_TEST_TOKEN)}` , { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || 'Upload failed');
       setStatus(`Uploaded: ${data.documentId} (chunks: ${data.chunkCount})`);

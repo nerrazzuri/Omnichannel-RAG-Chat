@@ -1,14 +1,20 @@
 """
 Query API router integrating conversation and RAG services.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from ai_core.models.message import QueryRequest, QueryResponse
 from ai_core.services.conversation_service import ConversationService
-from ai_core.services.rag_service import RAGService
+from ai_core.pipeline.rag_pipeline import RAGPipeline
+from ai_core.pipeline.rag_pipeline import RAGPipeline
+import os
 from ai_core.services.document_service import DocumentService
 from shared.database.session import get_db
+from ai_core.api.deps import require
 from shared.database.models import KnowledgeChunk, Document, KnowledgeBase
+from ai_core.api.deps import require
+from shared.security.policy import Policy
+from ai_core.pipeline.audit_service import write_audit
 import csv, io
 import uuid
 import numpy as np
@@ -16,16 +22,28 @@ import re
 
 router = APIRouter(prefix="/v1", tags=["query"])
 
-rag_service = RAGService()
+rag_pipeline = RAGPipeline()
 
 
 @router.post("/query", response_model=QueryResponse)
-def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryResponse:
+def post_query(payload: QueryRequest, request: Request, claims=Depends(require("retrieval:read", resource={"classification":"internal"})), db: Session = Depends(get_db)) -> QueryResponse:
     if not payload.tenant_id or not payload.message or not payload.channel:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing required fields: tenantId, message, channel",
         )
+
+    # Cross-tenant enforcement for non-admins
+    try:
+        if str(claims.get("role")) != "ADMIN" and str(payload.tenant_id) != str(claims.get("tenant_id")):
+            # Audit and deny
+            try:
+                write_audit(db, str(payload.tenant_id), claims.get("user_id"), f"policy.denied:retrieval:read", "policy", str(payload.message)[:256], "", False, 0)
+            except Exception:
+                pass
+            raise HTTPException(status_code=403, detail="Tenant mismatch")
+    except Exception:
+        pass
 
     # Validate/convert UUIDs for DB compatibility
     try:
@@ -106,15 +124,19 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         return 2 <= len(tokens) <= 4
 
     # Build tenant-specific corpus with associated columns metadata when available
-    rows = (
+    q = (
         db.query(KnowledgeChunk.content, KnowledgeChunk.embedding, Document.meta, KnowledgeChunk.meta)
         .join(Document, KnowledgeChunk.document_id == Document.id)
         .join(KnowledgeBase, Document.knowledge_base_id == KnowledgeBase.id)
         .filter(KnowledgeBase.tenant_id == tenant_uuid)
-        .order_by(KnowledgeChunk.created_at.desc())
-        .limit(2000)
-        .all()
     )
+    # ABAC filtering: exclude restricted for non-admins
+    try:
+        if str(claims.get("role")) != "ADMIN":
+            q = q.filter(Document.meta['classification'].astext != 'restricted')
+    except Exception:
+        pass
+    rows = q.order_by(KnowledgeChunk.created_at.desc()).limit(2000).all()
     corpus = [content for (content, _emb, _doc_meta, _kc_meta) in rows]
     row_embeddings = [emb for (_content, emb, _doc_meta, _kc_meta) in rows]
     corpus_columns = []
@@ -132,12 +154,37 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 row_map = None
         chunk_row_meta.append(row_map)
 
-    # Index and retrieve candidates if we have corpus; otherwise allow backend public fallback
+    # Build lightweight candidate indices (avoid rag_service dependency for retirement path)
     if corpus:
-        rag_service.retriever.index(corpus)
-        candidates = rag_service.retriever.retrieve(payload.message, top_k=10)
+        candidates = list(range(min(10, len(corpus))))
     else:
         candidates = []
+
+    # -------- Short-term memory helpers (generic, not just pronouns) --------
+    def read_memory_snippets(ctx: dict) -> list[str]:
+        try:
+            snips = ctx.get("memory_snippets", []) if isinstance(ctx, dict) else []
+            return [s for s in snips if isinstance(s, str) and s.strip()]
+        except Exception:
+            return []
+
+    def prepend_memory(preselected: list[str]) -> list[str]:
+        try:
+            mem_snips = read_memory_snippets(convo_ctx)
+            # Dedup (case-insensitive) and cap to 6 memory items
+            out = []
+            seen = set()
+            for s in mem_snips:
+                sl = s.strip().lower()
+                if sl in seen:
+                    continue
+                seen.add(sl)
+                out.append(s.strip())
+                if len(out) >= 6:
+                    break
+            return (out + preselected)[:12]
+        except Exception:
+            return preselected
 
     # Chapter navigation: answer "next chapter after chapter N"
     def detect_next_chapter_request(q: str):
@@ -310,11 +357,13 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             'department': ['department', 'dept', 'division', 'team', 'unit'],
             'manager': ['manager', 'managername', 'supervisor', 'boss', 'reports to', 'reporting manager'],
             'employmentstatus': ['employmentstatus', 'status', 'employment status', 'work status'],
+            'maritaldesc': ['marital status', 'married', 'single', 'divorced', 'widowed', 'maritaldesc'],
             'position': ['position', 'title', 'job title', 'role', 'designation'],
             'location': ['location', 'office', 'site', 'workplace', 'based in'],
             'recruitment_source': ['recruitment source', 'hiring source', 'recruitmentsource', 'recruit source', 'recruiting source', 'sourcing channel'],
             'last_performance_review_date': ['last performance review date', 'last review date', 'performance review date', 'last appraisal date', 'last evaluation date'],
             'date_of_birth': ['dob', 'date of birth', 'birthday', 'birth date', 'birthdate', 'dateofbirth'],
+            'performance_score': ['performance score', 'performancescore', 'rating', 'review score', 'appraisal score', 'evaluation score'],
         }
         for key, terms in mapping.items():
             if any(t in ql for t in terms):
@@ -337,11 +386,13 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
             'department': ['department', 'dept', 'division', 'team', 'unit'],
             'manager': ['manager', 'managername', 'reporting_manager', 'supervisor', 'boss'],
             'employmentstatus': ['employment_status', 'employmentstatus', 'work_status', 'status'],
+            'maritaldesc': ['marital', 'marital_status', 'maritalstatus', 'maritaldesc', 'married', 'single', 'divorced', 'widowed'],
             'position': ['position', 'title', 'job_title', 'designation', 'jobtitle'],
             'location': ['location', 'office', 'site', 'workplace', 'city', 'state'],
             'recruitment_source': ['recruitment_source', 'recruitmentsource', 'hiring_source', 'recruit_source', 'recruiting_source', 'sourcing_channel'],
             'last_performance_review_date': ['last_performance_review_date', 'performance_review_date', 'last_review_date', 'last_appraisal_date', 'last_evaluation_date'],
             'date_of_birth': ['dob', 'date_of_birth', 'dateofbirth', 'birth_date', 'birthdate'],
+            'performance_score': ['performance_score', 'performancescore', 'rating', 'review_score', 'appraisal_score', 'evaluation_score'],
         }
         for canon, syns in synonyms.items():
             if any(s in qn for s in syns):
@@ -373,11 +424,12 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
 
     requested = detect_requested_field(payload.message)
     if requested:
+        # Try to capture explicit name ("of/for NAME"); if missing, allow pronoun-only to rely on last_person memory
         person_match = re.search(r"(?:of|for)\s+([^?]+)", payload.message, flags=re.IGNORECASE)
         candidate = person_match.group(1).strip() if person_match else None
-        pronoun_ref = any(p in lower_q for p in ["his", "her", "their", "him", "them"])
+        pronoun_ref = any(p in re.findall(r"\b\w+\b", lower_q) for p in ["his", "her", "their", "him", "them"])
         # Determine person context: either pronoun referring to memory, or the captured phrase looks like a person
-        person_context = (pronoun_ref and 'last_person' in convo_ctx) or (candidate and looks_like_person(candidate))
+        person_context = (pronoun_ref and bool(convo_ctx.get('last_person'))) or (candidate and looks_like_person(candidate))
         if not person_context:
             # Not a person-specific query; answer via generic RAG/policy and return
             preselected_np = candidates[:6] if candidates else []
@@ -407,8 +459,23 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 preselected_np = (mem_unique + preselected_np)[:12]
             except Exception:
                 pass
-            result_np = rag_service.answer(payload.message, preselected_contexts=preselected_np)
+            # Always include general memory snippets for better context carryover
+            preselected_np = prepend_memory(preselected_np)
+            result_np = rag_pipeline.answer(payload.message, tenant_id=str(tenant_uuid), preselected_contexts=preselected_np, db=db, user_id=str(claims.get("user_id") or user_uuid))
             conversation_service.add_message(conversation, sender_type="SYSTEM", content=result_np["response"])
+            # Persist generic memory snippet (last 10)
+            try:
+                snips = read_memory_snippets(convo_ctx)
+                resp_txt = (result_np.get("response") or "").strip()
+                if resp_txt:
+                    snips.append(resp_txt)
+                    if len(snips) > 10:
+                        snips = snips[-10:]
+                    convo_ctx["memory_snippets"] = snips
+                    conversation.context = convo_ctx
+                    db.add(conversation); db.commit(); db.refresh(conversation)
+            except Exception:
+                db.rollback()
             return QueryResponse(**result_np)
         else:
             person_name_raw = candidate if candidate else convo_ctx.get('last_person')
@@ -491,6 +558,21 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         for row_idx, row_text, col_to_val in matching_rows:
             # Resolve field column dynamically using available columns in this row
             resolved_col, confidence = resolve_field_column(payload.message if not requested else requested.replace('_',' '), list(col_to_val.keys()))
+            # Guard against mismatched name carry-over: if last_person exists but row name mismatches, skip
+            lp = convo_ctx.get('last_person')
+            if lp:
+                try:
+                    lp_norm = norm_name(lp)
+                    row_name_val = None
+                    for nc in ['employee_name', 'name', 'employee', 'empname', 'full_name', 'employee_full_name']:
+                        if nc in col_to_val and str(col_to_val[nc]).strip() != '':
+                            row_name_val = norm_name(str(col_to_val[nc]))
+                            break
+                    if row_name_val and row_name_val != lp_norm and not candidate:
+                        # This row refers to a different person than memory; skip it
+                        continue
+                except Exception:
+                    pass
             candidate_cols = []
             if resolved_col:
                 candidate_cols.append(resolved_col)
@@ -535,6 +617,8 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
                 response_text = f"{person_display_name} is located in {best_value}."
             elif requested == 'recruitment_source':
                 response_text = f"The recruitment source of {person_display_name} is {best_value}."
+            elif requested == 'performance_score':
+                response_text = f"The performance score of {person_display_name} is {best_value}."
             else:
                 # Generic format for other fields
                 field_display = requested.replace('_', ' ').title()
@@ -597,7 +681,20 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         preselected = (mem_unique + preselected)[:12]
     except Exception:
         pass
-    result = rag_service.answer(payload.message, preselected_contexts=preselected, tenant_id=str(tenant_uuid), db=db)
+    # Always include general memory snippets for better context carryover
+    preselected = prepend_memory(preselected)
+    # capture correlation and auth info for audit
+    try:
+        correlation_id = getattr(__import__('builtins'), 'getattr')(getattr(__import__('builtins'), 'getattr')(globals().get('request', request), 'state', None), 'correlation_id', None) if request else None
+    except Exception:
+        correlation_id = None
+    try:
+        auth_type = getattr(request.state, 'auth_type', None) if request else None
+        api_key_id = getattr(request.state, 'api_key_id', None) if request else None
+    except Exception:
+        auth_type = None
+        api_key_id = None
+    result = rag_pipeline.answer(payload.message, tenant_id=str(tenant_uuid), preselected_contexts=preselected, db=db, user_id=str(claims.get("user_id") or user_uuid), correlation_id=correlation_id, auth_type=auth_type, api_key_id=api_key_id)
     # Persist short-term memory buffer (last 10) with interpreted outputs if available
     try:
         mem_key = "memory_buffer"
@@ -610,6 +707,17 @@ def post_query(payload: QueryRequest, db: Session = Depends(get_db)) -> QueryRes
         if len(buf) > 10:
             buf = buf[-10:]
         convo_ctx[mem_key] = buf
+        # Also persist a generic memory snippet of the response (last 10)
+        try:
+            snips = read_memory_snippets(convo_ctx)
+            resp_txt = (result.get("response") or "").strip()
+            if resp_txt:
+                snips.append(resp_txt)
+                if len(snips) > 10:
+                    snips = snips[-10:]
+                convo_ctx["memory_snippets"] = snips
+        except Exception:
+            pass
         conversation.context = convo_ctx
         db.add(conversation)
         db.commit()

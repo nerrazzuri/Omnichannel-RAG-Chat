@@ -1,7 +1,7 @@
 """
 SQLAlchemy data models for the Omnichannel Enterprise RAG Chatbot Platform.
 """
-from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, JSON, ForeignKey, Index
+from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, JSON, ForeignKey, Index, LargeBinary, SmallInteger
 from sqlalchemy.types import TypeDecorator, CHAR
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -152,6 +152,8 @@ class Document(Base):
     knowledge_base_id = Column(GUID(), ForeignKey("knowledge_bases.id"), nullable=False)
     title = Column(String(255), nullable=False)
     content = Column(Text, nullable=False)
+    raw_encrypted = Column(LargeBinary)
+    enc_ver = Column(SmallInteger, default=0)
     source_url = Column(String(500))
     meta = Column('metadata', JSON, default=dict)  # Author, publish_date, tags, etc.
     status = Column(String(50), default="PROCESSING")  # PROCESSING, INDEXED, FAILED
@@ -175,6 +177,8 @@ class KnowledgeChunk(Base):
     content = Column(Text, nullable=False)  # Chunk text content (~700 characters)
     chunk_index = Column(Integer, nullable=False)  # Position within document
     embedding = Column(JSON)  # Vector embedding stored as JSON array
+    content_encrypted = Column(LargeBinary)
+    enc_ver = Column(SmallInteger, default=0)
     meta = Column('metadata', JSON, default=dict)  # Chunk-level metadata
     created_at = Column(DateTime, default=func.now())
 
@@ -183,3 +187,165 @@ class KnowledgeChunk(Base):
 
     def __repr__(self):
         return f"<KnowledgeChunk(id={self.id}, document_id={self.document_id}, chunk_index={self.chunk_index})>"
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    user_id = Column(GUID())
+    api_key_id = Column(GUID())
+    correlation_id = Column(String(64))
+    auth_type = Column(String(20))  # jwt, api_key, anonymous
+    category = Column(String(50))  # access, modification, ingestion, generation, admin
+    action = Column(String(100), nullable=False)
+    resource = Column(String(255))
+    classification = Column(String(50))
+    origin = Column(String(100))
+    request_hash = Column(String(64))
+    response_hash = Column(String(64))
+    success = Column(Boolean, default=True)
+    latency_ms = Column(Integer, default=0)
+    model = Column(String(100))
+    token_input = Column(Integer)
+    token_output = Column(Integer)
+    extra = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=func.now(), index=True)
+
+Index("idx_audit_tenant_created", AuditLog.tenant_id, AuditLog.created_at)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    key_hash = Column(String(64), unique=True, nullable=False)
+    scopes = Column(JSON, default=list)  # list of allowed actions like ["retrieval:read", "ingestion:*"]
+    rate_limit_per_minute = Column(Integer, default=0)
+    expires_at = Column(DateTime)
+    revoked_at = Column(DateTime)
+    created_by = Column(GUID())
+    last_used_at = Column(DateTime)
+    created_at = Column(DateTime, default=func.now())
+
+Index("idx_apikey_tenant", ApiKey.tenant_id)
+
+
+class CostSummary(Base):
+    __tablename__ = "cost_summaries"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    model = Column(String(100), nullable=False)
+    kind = Column(String(30), nullable=False)  # chat|embed
+    window_start = Column(DateTime, default=func.now())
+    window_end = Column(DateTime, default=func.now())
+    tokens_in = Column(Integer, default=0)
+    tokens_out = Column(Integer, default=0)
+    cost_usd = Column(Integer)  # store in cents to avoid float
+    created_at = Column(DateTime, default=func.now())
+
+Index("idx_cost_tenant_window", CostSummary.tenant_id, CostSummary.window_start, CostSummary.window_end)
+
+
+class TenantRerankConfig(Base):
+    __tablename__ = "tenant_rerank_config"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    w_bm25 = Column(Integer, default=40)  # store as int percent for simplicity
+    w_dense = Column(Integer, default=50)
+    w_field_values = Column(Integer, default=60)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+Index("idx_rerank_tenant_active", TenantRerankConfig.tenant_id, TenantRerankConfig.active)
+
+
+class FeedbackEvent(Base):
+    __tablename__ = "feedback_events"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    user_id = Column(GUID())
+    query = Column(Text, nullable=False)
+    predicted_intent = Column(String(50))
+    final_response = Column(Text)
+    label = Column(String(50))  # helpful|unhelpful|correct|incorrect|intent_mismatch
+    meta = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=func.now(), index=True)
+
+Index("idx_feedback_tenant_created", FeedbackEvent.tenant_id, FeedbackEvent.created_at)
+
+
+class EvalRun(Base):
+    __tablename__ = "eval_runs"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    model = Column(String(100))
+    eval_type = Column(String(50))  # retrieval|generation|end2end
+    suite_name = Column(String(100))
+    started_at = Column(DateTime, default=func.now())
+    completed_at = Column(DateTime)
+    precision_at_k = Column(Integer)
+    recall_at_k = Column(Integer)
+    f1 = Column(Integer)
+    exact_match = Column(Integer)
+    avg_latency_ms = Column(Integer)
+    meta = Column(JSON, default=dict)
+
+Index("idx_eval_tenant_started", EvalRun.tenant_id, EvalRun.started_at)
+
+
+class ConversationMemory(Base):
+    __tablename__ = "conversation_memory"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    session_id = Column(GUID(), nullable=False)
+    role = Column(String(16), nullable=False)  # user | assistant
+    content = Column(Text, nullable=False)
+    summary = Column(Text)
+    created_at = Column(DateTime, default=func.now(), index=True)
+    expires_at = Column(DateTime)
+
+Index("idx_mem_tenant_session_created", ConversationMemory.tenant_id, ConversationMemory.session_id, ConversationMemory.created_at)
+
+
+class Approval(Base):
+    __tablename__ = "approvals"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
+    tool_id = Column(String(100), nullable=False)
+    action_payload_hash = Column(String(64), nullable=False)
+    action_payload_json = Column(Text)
+    requested_by = Column(GUID())
+    status = Column(String(20), default="pending")  # pending|approved|denied
+    reason = Column(Text)
+    decided_by = Column(GUID())
+    created_at = Column(DateTime, default=func.now(), index=True)
+    decided_at = Column(DateTime)
+    executed = Column(Boolean, default=False)
+    executed_at = Column(DateTime)
+    output_summary = Column(Text)
+    output_hash = Column(String(64))
+    deleted_at = Column(DateTime)
+
+Index("idx_approvals_tenant_status", Approval.tenant_id, Approval.status, Approval.created_at)
+try:
+    # PostgreSQL partial index for ready-to-execute approvals
+    Index(
+        "idx_approvals_ready_exec",
+        Approval.created_at,
+        postgresql_where=(
+            (Approval.status == 'approved') & (Approval.executed == False) & (Approval.deleted_at == None)
+        ),
+    )
+except Exception:
+    # Fallback generic composite index for other DBs
+    Index("idx_approvals_exec_generic", Approval.status, Approval.executed, Approval.created_at)

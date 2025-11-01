@@ -76,6 +76,13 @@ class RetrievalConfig:
     # Semantic-only fallback controls
     semantic_fallback_enabled: bool = os.getenv("RETR_SEMANTIC_FALLBACK_ENABLED", "true").lower() in ("1", "true", "yes")
     semantic_fallback_topk_multiplier: int = _get_int("RETR_SEMANTIC_FALLBACK_TOPK_MULT", 2)
+    # BM25 corpus size limit when building tenant corpus
+    bm25_corpus_limit: int = _get_int("RETR_BM25_CORPUS_LIMIT", 2000)
+    # BM25 cache TTL seconds
+    bm25_cache_ttl_s: int = _get_int("RETR_BM25_CACHE_TTL_S", 600)
+    # DuckDB connection lifecycle controls
+    duckdb_conn_ttl_s: int = _get_int("RETR_DUCKDB_CONN_TTL_S", 900)
+    duckdb_max_conns: int = _get_int("RETR_DUCKDB_MAX_CONNS", 16)
     # Embedding and fine-tuning controls
     embedding_model: str = os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large")
     fine_tune_enabled: bool = os.getenv("EMBED_FINE_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -105,9 +112,230 @@ class RerankerConfig:
     # Schema bias factor applied to matching contexts
     schema_bias_factor: float = _get_float("RERANK_SCHEMA_BIAS_FACTOR", 1.1)
  
+@dataclass(frozen=True)
+class QCConfig:
+    citation_min_ratio_lookup: float = _get_float("QC_CITATION_MIN_RATIO_LOOKUP", 0.6)
+    citation_min_ratio_compare: float = _get_float("QC_CITATION_MIN_RATIO_COMPARE", 0.6)
+    citation_min_ratio_summary: float = _get_float("QC_CITATION_MIN_RATIO_SUMMARY", 0.4)
+    hallucination_max_score: float = _get_float("QC_HALLUCINATION_MAX_SCORE", 0.4)
+    max_answer_tokens: int = _get_int("QC_MAX_ANSWER_TOKENS", 1200)
+    rewrite_max_attempts: int = _get_int("QC_REWRITE_MAX_ATTEMPTS", 1)
+    remove_disclaimers: bool = os.getenv("QC_REMOVE_DISCLAIMERS", "true").lower() in ("1", "true", "yes")
+    tenant_policy_footer: str = os.getenv("QC_TENANT_POLICY_FOOTER", "")
+
+# ------------------------------
+# Reliability & Ops Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class RetryConfig:
+    max_attempts: int = _get_int("RETRY_MAX_ATTEMPTS", 4)
+    base_delay_ms: int = _get_int("RETRY_BASE_DELAY_MS", 200)
+    max_delay_ms: int = _get_int("RETRY_MAX_DELAY_MS", 5000)
+    jitter_ms: int = _get_int("RETRY_JITTER_MS", 200)
+    queue_enabled: bool = os.getenv("RETRY_QUEUE_ENABLED", "true").lower() in ("1", "true", "yes")
+    queue_namespace: str = os.getenv("RETRY_QUEUE_NAMESPACE", "retry")
+
+
+@dataclass(frozen=True)
+class CircuitBreakerConfig:
+    failure_threshold: int = _get_int("CB_FAILURE_THRESHOLD", 5)
+    cooldown_ms: int = _get_int("CB_COOLDOWN_MS", 15000)
+    half_open_probe: int = _get_int("CB_HALF_OPEN_PROBE", 1)
+    tenant_aware: bool = os.getenv("CB_TENANT_AWARE", "true").lower() in ("1", "true", "yes")
+
+
+@dataclass(frozen=True)
+class DBPoolConfig:
+    pool_size: int = _get_int("DB_POOL_SIZE", 5)
+    max_overflow: int = _get_int("DB_MAX_OVERFLOW", 10)
+    pool_recycle: int = _get_int("DB_POOL_RECYCLE", 1800)
+    pool_timeout: int = _get_int("DB_POOL_TIMEOUT", 30)
+    echo: bool = os.getenv("DB_ECHO", "false").lower() in ("1", "true", "yes")
+
+
+@dataclass(frozen=True)
+class QdrantRecoveryConfig:
+    health_interval_ms: int = _get_int("QDRANT_HEALTH_INTERVAL_MS", 5000)
+    recovery_timeout_ms: int = _get_int("QDRANT_RECOVERY_TIMEOUT_MS", 30000)
+
+
+@dataclass(frozen=True)
+class TelemetryConfig:
+    enable_metrics: bool = os.getenv("TELEMETRY_ENABLE_METRICS", "true").lower() in ("1", "true", "yes")
+    enable_logs: bool = os.getenv("TELEMETRY_ENABLE_LOGS", "true").lower() in ("1", "true", "yes")
+
+# ------------------------------
+# Cost & Throttling Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class CostConfig:
+    # USD per 1K tokens (defaults; override via env like COST_MODEL_gpt_4o_mini_in=0.003)
+    model_in_usd_per_1k: dict = None  # type: ignore
+    model_out_usd_per_1k: dict = None  # type: ignore
+    persist_interval_s: int = _get_int("COST_PERSIST_INTERVAL_S", 60)
+
+    def __init__(self):  # type: ignore
+        object.__setattr__(self, 'model_in_usd_per_1k', {
+            os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini"): float(os.getenv("COST_MODEL_DEFAULT_IN", "0.003")),
+            os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"): float(os.getenv("COST_MODEL_EMBED_IN", "0.0001")),
+        })
+        object.__setattr__(self, 'model_out_usd_per_1k', {
+            os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini"): float(os.getenv("COST_MODEL_DEFAULT_OUT", "0.006")),
+        })
+
+
+@dataclass(frozen=True)
+class ThrottleConfig:
+    # Concurrent request caps per tenant
+    llm_concurrency_default: int = _get_int("THROTTLE_LLM_CONCURRENCY_DEFAULT", 3)
+    embed_concurrency_default: int = _get_int("THROTTLE_EMBED_CONCURRENCY_DEFAULT", 5)
+    # Optional per-tier overrides
+    tier_llm_caps: dict = None  # type: ignore
+    tier_embed_caps: dict = None  # type: ignore
+
+    def __init__(self):  # type: ignore
+        object.__setattr__(self, 'tier_llm_caps', {
+            'BASIC': _get_int('THROTTLE_LLM_BASIC', 2),
+            'PRO': _get_int('THROTTLE_LLM_PRO', 5),
+            'ENTERPRISE': _get_int('THROTTLE_LLM_ENTERPRISE', 10),
+        })
+        object.__setattr__(self, 'tier_embed_caps', {
+            'BASIC': _get_int('THROTTLE_EMBED_BASIC', 4),
+            'PRO': _get_int('THROTTLE_EMBED_PRO', 10),
+            'ENTERPRISE': _get_int('THROTTLE_EMBED_ENTERPRISE', 20),
+        })
+
+
+@dataclass(frozen=True)
+class QuantizationConfig:
+    enabled: bool = os.getenv("VECTOR_QUANT_ENABLED", "false").lower() in ("1", "true", "yes")
+    decimals: int = _get_int("VECTOR_QUANT_DECIMALS", 3)  # simple rounding-based compression
+
+
+# ------------------------------
+# Quality Gate Config (CI)
+# ------------------------------
+
+@dataclass(frozen=True)
+class QualityGateConfig:
+    enable_gating: bool = os.getenv("QUALITY_GATING_ENABLED", "true").lower() in ("1", "true", "yes")
+    min_precision: float = _get_float("QUALITY_MIN_PRECISION", 0.50)
+    min_recall: float = _get_float("QUALITY_MIN_RECALL", 0.50)
+    min_f1: float = _get_float("QUALITY_MIN_F1", 0.50)
+    max_avg_latency_ms: int = _get_int("QUALITY_MAX_AVG_LATENCY_MS", 4000)
+    tier_prod_min_f1: float = _get_float("QUALITY_TIER_PROD_MIN_F1", 0.65)
+    tier_staging_min_f1: float = _get_float("QUALITY_TIER_STAGING_MIN_F1", 0.55)
+
 # Singleton-style accessors
 chunking = ChunkingConfig()
 retrieval = RetrievalConfig()
 reranker_config = RerankerConfig()  # 新增的
+qc = QCConfig()
+retries = RetryConfig()
+circuit_breaker = CircuitBreakerConfig()
+db_pool = DBPoolConfig()
+qdrant_recovery = QdrantRecoveryConfig()
+telemetry = TelemetryConfig()
+cost = CostConfig()
+throttle = ThrottleConfig()
+quant = QuantizationConfig()
+quality_gate = QualityGateConfig()
 
+
+# ------------------------------
+# Connector & Scheduler Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class ConnectorConfig:
+    enabled: bool = os.getenv("CONNECTORS_ENABLED", "false").lower() in ("1", "true", "yes")
+    # comma-separated list of connector names to load
+    enabled_names: str = os.getenv("CONNECTORS_LIST", "sharepoint,googledrive,salesforce")
+    # default sync interval seconds
+    default_interval_s: int = _get_int("CONNECTOR_DEFAULT_INTERVAL_S", 900)
+    # run scheduler loop
+    scheduler_enabled: bool = os.getenv("CONNECTOR_SCHEDULER_ENABLED", "true").lower() in ("1", "true", "yes")
+    # optional manifest JSON file mapping connectors to tenants
+    manifest_json_path: str = os.getenv("CONNECTOR_MANIFEST_JSON", "")
+    # cursor TTL seconds for connector delta checkpoints
+    cursor_ttl_seconds: int = _get_int("CONNECTOR_CURSOR_TTL_S", 7 * 24 * 3600)
+
+
+connectors = ConnectorConfig()
+
+
+# ------------------------------
+# Agent Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class AgentConfig:
+    enabled: bool = os.getenv("AGENTS_ENABLED", "false").lower() in ("1", "true", "yes")
+    max_steps: int = _get_int("AGENT_MAX_STEPS", 6)
+    max_tokens_reasoning: int = _get_int("AGENT_MAX_TOKENS_REASONING", 4000)
+    time_budget_ms: int = _get_int("AGENT_TIME_BUDGET_MS", 20000)
+    sandbox_mode: bool = os.getenv("AGENT_SANDBOX", "true").lower() in ("1", "true", "yes")
+    sandbox_feature_flag: bool = os.getenv("AGENT_SANDBOX_ENABLED", "true").lower() in ("1", "true", "yes")
+    tool_default_timeout_ms: int = _get_int("AGENT_TOOL_DEFAULT_TIMEOUT_MS", 15000)
+    tool_retry_max: int = _get_int("AGENT_TOOL_RETRY_MAX", 2)
+    tool_retry_backoff_ms: int = _get_int("AGENT_TOOL_RETRY_BACKOFF_MS", 300)
+    rate_limit_qps_global: int = _get_int("AGENT_RATE_LIMIT_QPS_GLOBAL", 3)
+    rate_limit_qps_per_tool: int = _get_int("AGENT_RATE_LIMIT_QPS_PER_TOOL", 2)
+    require_approval_for_external_domains: bool = os.getenv("AGENT_REQUIRE_APPROVAL_EXTERNAL", "true").lower() in ("1","true","yes")
+    sql_allowlist_enabled: bool = os.getenv("AGENT_SQL_ALLOWLIST_ENABLED", "true").lower() in ("1","true","yes")
+    file_export_allowed_buckets: str = os.getenv("AGENT_FILE_EXPORT_ALLOWED_BUCKETS", "tenant-${id}/")
+
+
+agents = AgentConfig()
+
+
+# ------------------------------
+# Memory Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class MemoryConfig:
+    ttl_days: int = _get_int("MEMORY_TTL_DAYS", 7)
+    summary_trigger_turns: int = _get_int("MEMORY_SUMMARY_TRIGGER", 5)
+    max_context_tokens: int = _get_int("MEMORY_MAX_CONTEXT_TOKENS", 3000)
+    prune_strategy: str = os.getenv("MEMORY_PRUNE_STRATEGY", "oldest").lower()
+    pii_extended: bool = os.getenv("MEMORY_PII_EXTENDED", "false").lower() in ("1", "true", "yes")
+
+
+memory = MemoryConfig()
+
+
+# ------------------------------
+# Vault / Secret Manager Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class VaultConfig:
+    enabled: bool = os.getenv("VAULT_ENABLED", "false").lower() in ("1", "true", "yes")
+    addr: str = os.getenv("VAULT_ADDR", "")
+    token: str = os.getenv("VAULT_TOKEN", "")
+    mount_path: str = os.getenv("VAULT_MOUNT_PATH", "secret/data/ai_core")  # KVv2: secret/data/<path>
+    refresh_interval_s: int = _get_int("VAULT_REFRESH_INTERVAL_S", 600)
+    cache_ttl_s: int = _get_int("VAULT_CACHE_TTL_S", 600)
+    system_tenant_id: str = os.getenv("VAULT_SYSTEM_TENANT_ID", "00000000-0000-0000-0000-000000000001")
+
+
+vault = VaultConfig()
+
+
+# ------------------------------
+# Agent Approval Worker Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class AgentApprovalConfig:
+    poll_interval_s: int = _get_int("AGENT_APPROVAL_POLL_INTERVAL_S", 15)
+    batch_size: int = _get_int("AGENT_APPROVAL_BATCH_SIZE", 10)
+    retry_max: int = _get_int("AGENT_APPROVAL_RETRY_MAX", 3)
+    retry_backoff_ms: int = _get_int("AGENT_APPROVAL_RETRY_BACKOFF_MS", 1000)
+
+
+agent_approval = AgentApprovalConfig()
 

@@ -1,3 +1,19 @@
+.env
+*.env
+__pycache__/
+*.pyc
+*.zip
+*.xlsx
+.DS_Store
+/node_modules
+/.venv
+/.idea
+/.vscode
+/__pycache__/
+/backend/src.zip
+key.json
+secrets/*.json
+/Total Data.xlsx
 # Dependencies
 node_modules/
 .pnp

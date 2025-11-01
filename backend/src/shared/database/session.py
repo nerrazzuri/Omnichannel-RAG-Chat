@@ -14,6 +14,7 @@ from .models import Base
 import os
 import time
 import logging
+from shared.config.tuning import db_pool
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,17 @@ def _create_engine_for_url(url: str):
             url,
             poolclass=StaticPool,
             connect_args={"check_same_thread": False},
-            echo=True,  # Set to False in production
+            echo=db_pool.echo,
         )
     # Non-SQLite: use default pooling and pre_ping
     return create_engine(
         url,
-        echo=True,  # Set to False in production
+        echo=db_pool.echo,
         pool_pre_ping=True,
+        pool_size=db_pool.pool_size,
+        max_overflow=db_pool.max_overflow,
+        pool_recycle=db_pool.pool_recycle,
+        pool_timeout=db_pool.pool_timeout,
     )
 
 def _try_connect(test_engine, attempts: int = 10, delay_seconds: float = 1.0) -> bool:
@@ -49,17 +54,20 @@ def _try_connect(test_engine, attempts: int = 10, delay_seconds: float = 1.0) ->
             time.sleep(delay_seconds)
     return False
 
-# Create primary engine; retry; fallback to SQLite if needed
+# Create primary engine; retry; environment-aware fallback
 engine = _create_engine_for_url(DATABASE_URL)
 if not DATABASE_URL.startswith("sqlite"):
     if not _try_connect(engine):
-        logger.warning(
-            f"Primary DB unreachable at {DATABASE_URL}. Falling back to SQLite (./test.db) for development."
-        )
-        DATABASE_URL = "sqlite:///./test.db"
-        engine = _create_engine_for_url(DATABASE_URL)
-        # No retry needed for local SQLite, but attempt once to create file
-        _try_connect(engine, attempts=1)
+        env = os.getenv("ENV", "dev").lower()
+        if env in ("dev", "local", "test"):
+            logger.warning(
+                f"Primary DB unreachable at {DATABASE_URL}. Falling back to SQLite (./test.db) for development."
+            )
+            DATABASE_URL = "sqlite:///./test.db"
+            engine = _create_engine_for_url(DATABASE_URL)
+            _try_connect(engine, attempts=1)
+        else:
+            raise RuntimeError(f"Database unreachable at {DATABASE_URL} in {env} environment. Failing fast.")
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -93,7 +101,7 @@ _initialized = False
 
 def get_db() -> Session:
     """Get database session."""
-    global _initialized
+    global _initialized, engine, SessionLocal  # noqa: PLW0603
     if not _initialized:
         try:
             _ensure_sqlite_migrations()
@@ -102,6 +110,19 @@ def get_db() -> Session:
             _initialized = True
     db = SessionLocal()
     try:
+        # Proactive ping to avoid stale connections in long-lived pools
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception:
+            # Attempt to recreate engine and session on failure
+            try:
+                engine.dispose()
+            except Exception:
+                pass
+            engine = _create_engine_for_url(DATABASE_URL)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            db.close()
+            db = SessionLocal()
         yield db
     finally:
         db.close()

@@ -14,6 +14,7 @@ from pptx import Presentation
 from openpyxl import load_workbook
 from shared.vector.qdrant import qdrant_service
 from shared.config.tuning import chunking
+from shared.crypto.crypto_service import crypto_service
 try:
     import tiktoken  # type: ignore
 except Exception:
@@ -39,8 +40,64 @@ def chunk_text(text: str, chunk_size: int = 700, overlap: int = 100) -> List[str
 class DocumentService:
     def __init__(self, db: Session):
         self.db = db
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.openai_client = self.client if os.getenv("OPENAI_API_KEY") else None
+    # ------------------------------
+    # Normalized connector ingestion
+    # ------------------------------
+    def process_normalized_records(self, records: list) -> int:
+        """Ingest normalized connector records with dedup detection.
+
+        Records are dict-like objects with fields per NormalizedRecord.
+        """
+        from shared.database.models import KnowledgeBase, Document, KnowledgeChunk, KnowledgeBase as _KB
+        import uuid as _uuid
+        count = 0
+        for rec in records:
+            try:
+                tenant_id = rec.tenant_id if hasattr(rec, 'tenant_id') else rec.get('tenant_id')
+                source_system = rec.source_system if hasattr(rec, 'source_system') else rec.get('source_system')
+                external_id = rec.external_id if hasattr(rec, 'external_id') else rec.get('external_id')
+                title = rec.title if hasattr(rec, 'title') else rec.get('title')
+                content = rec.content if hasattr(rec, 'content') else rec.get('content')
+                meta = {
+                    "source_system": source_system,
+                    "external_id": external_id,
+                    "owner": getattr(rec, 'owner', None) if hasattr(rec, 'owner') else rec.get('owner'),
+                    "classification": getattr(rec, 'classification', None) if hasattr(rec, 'classification') else rec.get('classification'),
+                }
+                # Find or create a default KB for connector ingestion
+                kb = self.db.query(KnowledgeBase).filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.name == "connector").first()
+                if not kb:
+                    kb = KnowledgeBase(tenant_id=tenant_id, name="connector")
+                    self.db.add(kb); self.db.commit(); self.db.refresh(kb)
+                # Dedup: existing document with same external id and source
+                existing = self.db.query(Document).filter(Document.knowledge_base_id == kb.id, Document.meta['external_id'].astext == external_id, Document.meta['source_system'].astext == source_system).first()
+                if existing:
+                    doc = existing
+                else:
+                    doc = Document(knowledge_base_id=kb.id, title=title, content=content[:160], meta=meta, status="PROCESSING")
+                    self.db.add(doc); self.db.commit(); self.db.refresh(doc)
+                # Create one chunk per record (can be extended to chunking later)
+                kc = KnowledgeChunk(
+                    id=_uuid.uuid4(),
+                    document_id=doc.id,
+                    content=content[:1600],
+                    chunk_index=0,
+                    embedding=None,
+                    meta={"source": source_system}
+                )
+                self.db.add(kc); self.db.commit()
+                count += 1
+            except Exception:
+                self.db.rollback()
+                continue
+        return count
+        try:
+            from shared.security.secret_manager import secret_manager
+            api_key = secret_manager.get("OPENAI_API_KEY")
+        except Exception:
+            api_key = os.getenv("OPENAI_API_KEY")
+        self.client = OpenAI(api_key=api_key) if api_key else None
+        self.openai_client = self.client if api_key else None
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
@@ -299,7 +356,7 @@ class DocumentService:
                     # Rough heuristic: 4 chars per token
                     return max(1, len(text) // 4)
 
-                MAX_TOKENS_PER_REQUEST = 280_000  # keep below 300k limit
+                MAX_TOKENS_PER_REQUEST = 100_000  # conservative to avoid 400s on large batches
                 embeddings: List[List[float]] = []
                 batch: List[str] = []
                 tokens_in_batch = 0
@@ -307,7 +364,7 @@ class DocumentService:
                     t_tokens = estimate_tokens(t)
                     if batch and tokens_in_batch + t_tokens > MAX_TOKENS_PER_REQUEST:
                         resp = self.client.embeddings.create(
-                            model=os.getenv("RAG_EMBED_MODEL", "gpt-5-mini"),
+                            model=os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"),
                             input=batch,
                         )
                         embeddings.extend([d.embedding for d in resp.data])
@@ -318,7 +375,7 @@ class DocumentService:
 
                 if batch:
                     resp = self.client.embeddings.create(
-                        model=os.getenv("RAG_EMBED_MODEL", "gpt-5-mini"),
+                        model=os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"),
                         input=batch,
                     )
                     embeddings.extend([d.embedding for d in resp.data])
@@ -356,15 +413,30 @@ class DocumentService:
             # Ensure a knowledge base exists for this tenant
             kb_id = self._get_or_create_knowledge_base(tenant_id, knowledge_base_id)
 
-            # Create document
-            doc = Document(title=title, content=content, knowledge_base_id=kb_id, status="PROCESSING")
+            # PII redaction
+            try:
+                from ai_core.services.redactor import Redactor
+                content = Redactor().sanitize(content)
+            except Exception:
+                pass
+            # Optional encryption at rest
+            raw_content = content
+            try:
+                from shared.crypto.crypto_service import crypto_service
+                enc = crypto_service.encrypt(tenant_id, raw_content.encode("utf-8"))
+                doc = Document(title=title, content="", knowledge_base_id=kb_id, status="PROCESSING")
+                setattr(doc, 'raw_encrypted', enc)
+                setattr(doc, 'enc_ver', 1)
+            except Exception:
+                # Fallback to plaintext content if crypto not configured
+                doc = Document(title=title, content=content, knowledge_base_id=kb_id, status="PROCESSING")
             self.db.add(doc)
             self.db.commit()
             self.db.refresh(doc)
 
             # AI-driven ingest plan and chunking
             plan = self.plan_ingest(title, content[:8000])
-            chunk_pairs = self._build_chunks_with_metadata(content)
+            chunk_pairs = self._build_chunks_with_metadata(raw_content)
             chunks = [t for (t, _m) in chunk_pairs]
             metas = [m for (_t, m) in chunk_pairs]
             if not chunks:
@@ -379,6 +451,13 @@ class DocumentService:
                     pass
             # Use planner directive for embedding path
             use_local_embeddings = bool(plan.get("use_local_embeddings"))
+            # Decrypt if needed (already sanitized)
+            try:
+                if hasattr(doc, 'raw_encrypted') and getattr(doc, 'raw_encrypted'):
+                    dec = crypto_service.decrypt(tenant_id, getattr(doc, 'raw_encrypted'))
+                    raw_content = dec.decode('utf-8', errors='ignore')
+            except Exception:
+                pass
             embeddings = self.embed(chunks, force_local=use_local_embeddings)
 
             # Store chunks
@@ -434,7 +513,7 @@ class DocumentService:
             try:
                 if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
                     dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
-                    if dim == 1536:
+                    if dim in (1536, 3072, 1024):
                         try:
                             qdrant_service.create_collection()
                         except Exception:
@@ -444,6 +523,17 @@ class DocumentService:
                             qdrant_service.upsert_knowledge_chunks(tenant_id, qdrant_payload)
                         except Exception as e:
                             logging.getLogger(__name__).warning(f"Qdrant upsert skipped: {e}")
+                            # enqueue for async retry (best-effort)
+                            try:
+                                from shared.queue.retry_queue import retry_queue
+                                retry_queue.enqueue(
+                                    job_type="qdrant_upsert",
+                                    tenant_id=tenant_id,
+                                    payload={"chunks": qdrant_payload},
+                                    last_error=str(e),
+                                )
+                            except Exception:
+                                pass
                     else:
                         logging.getLogger(__name__).info("Skipping Qdrant upsert due to embedding dimension mismatch")
             except Exception:
@@ -697,15 +787,28 @@ class DocumentService:
                 except Exception:
                     pass
             # Embed docs (use local for robustness by default for tabular)
-            texts = [t for (t, _m) in docs]
+            # PII redaction for tabular docs
+            try:
+                from ai_core.services.redactor import Redactor
+                red = Redactor()
+                texts = [red.sanitize(t) for (t, _m) in docs]
+            except Exception:
+                texts = [t for (t, _m) in docs]
             metas = [m for (_t, m) in docs]
-            embeddings = self.embed(texts, force_local=True)
+            # Prefer remote embeddings when available (3072/1536 dims) for Qdrant upsert; fallback to local 256-d
+            use_local = False if os.getenv("OPENAI_API_KEY") else True
+            embeddings = self.embed(texts, force_local=use_local)
             # Store rows as KnowledgeChunks
             qdrant_payload: List[Dict[str, Any]] = []
             for idx, (t, m, emb) in enumerate(zip(texts, metas, embeddings)):
                 import uuid as _uuid
                 chunk_id = _uuid.uuid4()
-                kc = KnowledgeChunk(id=chunk_id, document_id=parent.id, content=t, chunk_index=idx, embedding=emb, meta=m)
+                # Encrypt chunk content; store preview only in plaintext
+                try:
+                    enc = crypto_service.encrypt(tenant_id, t.encode('utf-8'))
+                    kc = KnowledgeChunk(id=chunk_id, document_id=parent.id, content=t[:160], content_encrypted=enc, enc_ver=1, chunk_index=idx, embedding=emb, meta=m)
+                except Exception:
+                    kc = KnowledgeChunk(id=chunk_id, document_id=parent.id, content=t, chunk_index=idx, embedding=emb, meta=m)
                 self.db.add(kc)
                 total_chunks += 1
                 # Prepare optional vector payload
@@ -715,7 +818,7 @@ class DocumentService:
                         "embedding": emb,
                         "document_id": str(parent.id),
                         "document_title": parent.title,
-                        "content": t,
+                        "content": t[:160],
                         "chunk_index": idx,
                         "chapter_num": None,
                         "chapter_title": None,
@@ -733,7 +836,7 @@ class DocumentService:
             try:
                 if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
                     dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
-                    if dim == 1536:
+                    if dim in (1536, 3072, 1024):
                         try:
                             qdrant_service.create_collection()
                         except Exception:
@@ -782,6 +885,11 @@ class DocumentService:
                             context_bits.append(f"File: {title}")
                         ctx_str = " | ".join(context_bits)
                         text = f"Field: {field_display} | Value: {value_raw} | Record: {int(ridx)+1}" + (f" | {ctx_str}" if ctx_str else "")
+                        try:
+                            from ai_core.services.redactor import Redactor
+                            text = Redactor().sanitize(text)
+                        except Exception:
+                            pass
                         fv_texts.append(text)
                         # Basic importance heuristic: de-emphasize id-like fields
                         importance = 0.8
@@ -805,7 +913,7 @@ class DocumentService:
                 if fv_texts:
                     emb = self.embed(fv_texts, force_local=False)
                     ready: List[Dict[str, Any]] = []
-                    if emb and all(isinstance(v, list) and len(v) == 1536 for v in emb):
+                    if emb and all(isinstance(v, list) and len(v) in (1536, 3072, 1024) for v in emb):
                         import uuid as _uuid
                         for m, vec in zip(fv_meta, emb):
                             fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:fv:{m['document_id']}:{m['row_index']}:{m['field_name']}"))
@@ -855,7 +963,7 @@ class DocumentService:
                     # Validate dimensions
                     ready: List[Dict[str, Any]] = []
                     for i, (cname, emb) in enumerate(zip(col_names, schema_embs)):
-                        if isinstance(emb, list) and len(emb) == 1536:
+                        if isinstance(emb, list) and len(emb) in (1536, 3072, 1024):
                             import uuid as _uuid
                             # Deterministic ID per tenant+field
                             fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"))
@@ -1113,8 +1221,16 @@ class DocumentService:
                     redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "embedding", "progress": 40}, ttl=3600)
                 except Exception:
                     pass
+            # Redact PII in raw row strings
+            try:
+                from ai_core.services.redactor import Redactor
+                red = Redactor()
+                data_rows = [red.sanitize(r) for r in data_rows]
+            except Exception:
+                pass
             # For tabular rows, use local deterministic embeddings to avoid API payload rejections
-            embeddings = self.embed(data_rows, force_local=True)
+            use_local = False if os.getenv("OPENAI_API_KEY") else True
+            embeddings = self.embed(data_rows, force_local=use_local)
             qdrant_payload: List[Dict[str, Any]] = []
             for idx, (row_text, emb) in enumerate(zip(data_rows, embeddings)):
                 import uuid as _uuid
@@ -1135,7 +1251,12 @@ class DocumentService:
                     pass
                 if sheet_name:
                     meta_row['sheet'] = sheet_name
-                kc = KnowledgeChunk(id=chunk_id, document_id=doc.id, content=row_text, chunk_index=idx, embedding=emb, meta=meta_row)
+                # Encrypt and store preview
+                try:
+                    enc = crypto_service.encrypt(tenant_id, row_text.encode('utf-8'))
+                    kc = KnowledgeChunk(id=chunk_id, document_id=doc.id, content=row_text[:160], content_encrypted=enc, enc_ver=1, chunk_index=idx, embedding=emb, meta=meta_row)
+                except Exception:
+                    kc = KnowledgeChunk(id=chunk_id, document_id=doc.id, content=row_text, chunk_index=idx, embedding=emb, meta=meta_row)
                 self.db.add(kc)
                 if progress_job_id and idx % 50 == 0:
                     try:
@@ -1167,7 +1288,7 @@ class DocumentService:
             try:
                 if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
                     dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
-                    if dim == 1536:
+                    if dim in (1536, 3072, 1024):
                         try:
                             qdrant_service.create_collection()
                         except Exception:
@@ -1198,7 +1319,7 @@ class DocumentService:
                         schema_embs = self.embed(col_texts, force_local=False)
                         ready: List[Dict[str, Any]] = []
                         for cname, emb in zip(col_names, schema_embs):
-                            if isinstance(emb, list) and len(emb) == 1536:
+                            if isinstance(emb, list) and len(emb) in (1536, 3072, 1024):
                                 import uuid as _uuid
                                 fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"))
                                 ready.append({

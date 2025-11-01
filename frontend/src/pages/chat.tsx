@@ -16,7 +16,7 @@ export default function ChatPage() {
   // Seed Omni greeting on initial load for better UX
   useEffect(() => {
     if (messages.length === 0) {
-      setMessages([{ role: 'assistant', content: "Hello! I’m Omni. How can I help you today?" }]);
+      setMessages([{ role: 'assistant', content: "Hello! I'm Omni. How can I help you today?" }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
