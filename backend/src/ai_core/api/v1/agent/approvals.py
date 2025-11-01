@@ -7,6 +7,7 @@ from shared.database.session import SessionLocal
 from shared.database.models import Approval
 from sqlalchemy.orm import Session
 from shared.metrics.agent_tool_metrics import agent_tool_metrics
+from sqlalchemy.sql import func as _func
 
 
 router = APIRouter(prefix="/v1/agent/approvals", tags=["agent-approvals"])
@@ -143,5 +144,20 @@ def delete_approval(approval_id: str, db: Session = Depends(get_db), request: Re
     db.add(rec)
     db.commit()
     return {"status": "deleted"}
+
+
+@router.get("/stats")
+def approvals_stats(tenant_id: str | None = Query(None), db: Session = Depends(get_db), request: Request = None):
+    if request:
+        _require_manage(request)
+    q = db.query(Approval.status, _func.count(Approval.id))
+    if tenant_id:
+        q = q.filter(Approval.tenant_id == tenant_id)
+    q = q.group_by(Approval.status)
+    rows = q.all()
+    by_status = {str(status): int(cnt) for status, cnt in rows}
+    # pending execution queue size
+    queue_count = db.query(_func.count(Approval.id)).filter(Approval.status == 'approved', Approval.executed == False, Approval.deleted_at == None).scalar()  # noqa: E712
+    return {"by_status": by_status, "queue_size": int(queue_count or 0)}
 
 

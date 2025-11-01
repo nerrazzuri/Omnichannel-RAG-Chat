@@ -337,3 +337,15 @@ class Approval(Base):
     deleted_at = Column(DateTime)
 
 Index("idx_approvals_tenant_status", Approval.tenant_id, Approval.status, Approval.created_at)
+try:
+    # PostgreSQL partial index for ready-to-execute approvals
+    Index(
+        "idx_approvals_ready_exec",
+        Approval.created_at,
+        postgresql_where=(
+            (Approval.status == 'approved') & (Approval.executed == False) & (Approval.deleted_at == None)
+        ),
+    )
+except Exception:
+    # Fallback generic composite index for other DBs
+    Index("idx_approvals_exec_generic", Approval.status, Approval.executed, Approval.created_at)

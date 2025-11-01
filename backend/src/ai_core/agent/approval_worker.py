@@ -5,6 +5,7 @@ import random
 import hashlib
 from typing import Dict, Any
 from sqlalchemy.orm import Session
+import logging
 from sqlalchemy import and_
 from shared.database.session import SessionLocal
 from shared.database.models import Approval
@@ -39,8 +40,9 @@ def process_once(db: Session, batch_size: int) -> int:
             # naive json parse fallback
             try:
                 import json as _json
-                payload = _json.loads(payload_str) if payload_str.startswith("{") else {}
-            except Exception:
+                payload = _json.loads(payload_str) if payload_str and payload_str.strip().startswith("{") else {}
+            except Exception as e:
+                logging.getLogger(__name__).exception("[approval_worker.payload_parse] invalid JSON", extra={"approval_id": str(rec.id)})
                 payload = {}
             res = tool.execute(tenant_id=str(rec.tenant_id), api_key_id=None, payload=payload)
             out_sum = {k: v for k, v in res.items() if k != "status"}
@@ -62,6 +64,7 @@ def process_once(db: Session, batch_size: int) -> int:
                 pass
             approval_metrics.inc_failure()
             approval_metrics.observe_latency_ms(int((time.time()-t0)*1000))
+            logging.getLogger(__name__).exception("[approval_worker.process] execution error", extra={"approval_id": str(rec.id), "tool": rec.tool_id})
             # simple retry jitter handled by outer loop cadence
             continue
     return processed
