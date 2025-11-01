@@ -323,11 +323,17 @@ class Approval(Base):
     tenant_id = Column(GUID(), ForeignKey("tenants.id"), nullable=False)
     tool_id = Column(String(100), nullable=False)
     action_payload_hash = Column(String(64), nullable=False)
+    action_payload_json = Column(Text)
     requested_by = Column(GUID())
     status = Column(String(20), default="pending")  # pending|approved|denied
     reason = Column(Text)
     decided_by = Column(GUID())
     created_at = Column(DateTime, default=func.now(), index=True)
     decided_at = Column(DateTime)
+    executed = Column(Boolean, default=False)
+    executed_at = Column(DateTime)
+    output_summary = Column(Text)
+    output_hash = Column(String(64))
+    deleted_at = Column(DateTime)
 
 Index("idx_approvals_tenant_status", Approval.tenant_id, Approval.status, Approval.created_at)

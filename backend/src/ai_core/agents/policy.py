@@ -61,10 +61,17 @@ class PolicyEngine:
             tenant_id=uuid.UUID(str(tenant_id)),
             tool_id=tool_id,
             action_payload_hash=ah,
+            action_payload_json=str(payload),
             status="pending",
         )
         self.db.add(rec)
         self.db.commit()
+        # Audit request
+        try:
+            from ai_core.pipeline.audit_service import write_audit
+            write_audit(self.db, tenant_id, None, "agent.approval.request", tool_id, str(payload), "", True, 0, category="agent")
+        except Exception:
+            pass
         return str(rec.id)
 
 

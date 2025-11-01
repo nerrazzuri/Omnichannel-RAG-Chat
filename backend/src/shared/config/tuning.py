@@ -324,3 +324,18 @@ class VaultConfig:
 
 vault = VaultConfig()
 
+
+# ------------------------------
+# Agent Approval Worker Config
+# ------------------------------
+
+@dataclass(frozen=True)
+class AgentApprovalConfig:
+    poll_interval_s: int = _get_int("AGENT_APPROVAL_POLL_INTERVAL_S", 15)
+    batch_size: int = _get_int("AGENT_APPROVAL_BATCH_SIZE", 10)
+    retry_max: int = _get_int("AGENT_APPROVAL_RETRY_MAX", 3)
+    retry_backoff_ms: int = _get_int("AGENT_APPROVAL_RETRY_BACKOFF_MS", 1000)
+
+
+agent_approval = AgentApprovalConfig()
+

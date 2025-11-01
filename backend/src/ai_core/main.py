@@ -374,9 +374,19 @@ async def lifespan(app: FastAPI):
     t1 = threading.Thread(target=_qdrant_health_loop, daemon=True)
     t2 = threading.Thread(target=_retry_worker_loop, daemon=True)
     t3 = threading.Thread(target=_memory_cleanup_loop, daemon=True)
+    # Approval worker
+    def _approval_loop():
+        try:
+            from ai_core.agent.approval_worker import loop as _ap_loop
+            _ap_loop(stop_flag)
+        except Exception as e:
+            stability_metrics.inc_bg_failure("approval_worker")
+            log_and_continue(e, "agent.approval_worker", None, None)
+    t4 = threading.Thread(target=_approval_loop, daemon=True)
     t1.start()
     t2.start()
     t3.start()
+    t4.start()
 
     # Start connector scheduler if enabled
     scheduler_thread = None

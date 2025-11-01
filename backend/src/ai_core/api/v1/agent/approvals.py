@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from shared.database.session import SessionLocal
@@ -37,8 +37,17 @@ class ApprovalDecision(BaseModel):
     decided_by: Optional[str] = None
 
 
+def _require_manage(request: Request):
+    claims = getattr(request.state, "claims", {}) or {}
+    scopes = set((claims.get("scopes") or []))
+    role = (claims.get("role") or "").upper()
+    if "agent:approval.manage" in scopes or role == "ADMIN":
+        return True
+    raise HTTPException(status_code=403, detail="forbidden")
+
+
 @router.post("/request")
-def create_request(req: ApprovalRequest, db: Session = Depends(get_db)):
+def create_request(req: ApprovalRequest, db: Session = Depends(get_db), request: Request = None):
     rec = Approval(
         tenant_id=req.tenant_id,
         tool_id=req.tool_id,
@@ -53,7 +62,9 @@ def create_request(req: ApprovalRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/decide")
-def decide(dec: ApprovalDecision, db: Session = Depends(get_db)):
+def decide(dec: ApprovalDecision, db: Session = Depends(get_db), request: Request = None):
+    if request:
+        _require_manage(request)
     rec = db.get(Approval, dec.approval_id)
     if not rec:
         raise HTTPException(status_code=404, detail="approval not found")
@@ -66,16 +77,71 @@ def decide(dec: ApprovalDecision, db: Session = Depends(get_db)):
     db.commit()
     if rec.status == "approved":
         agent_tool_metrics.inc_approval_granted(str(rec.tenant_id), rec.tool_id)
+    # Audit decision
+    try:
+        from ai_core.pipeline.audit_service import write_audit
+        write_audit(db, str(rec.tenant_id), None, "agent.approval.decision", rec.tool_id, rec.action_payload_hash, rec.status, True, 0, category="agent")
+    except Exception:
+        pass
     return {"status": rec.status}
 
 
 @router.get("/list")
-def list_approvals(tenant_id: str = Query(...), status: Optional[str] = Query(None), limit: int = Query(50), db: Session = Depends(get_db)):
+def list_approvals(tenant_id: str = Query(...), status: Optional[str] = Query(None), limit: int = Query(50), db: Session = Depends(get_db), request: Request = None):
+    if request:
+        _require_manage(request)
     q = db.query(Approval).filter(Approval.tenant_id == tenant_id)
     if status:
         q = q.filter(Approval.status == status)
     q = q.order_by(Approval.created_at.desc()).limit(min(200, max(1, limit)))
     rows = q.all()
-    return [{"id": str(r.id), "tool_id": r.tool_id, "status": r.status, "created_at": str(r.created_at), "decided_at": str(r.decided_at) if r.decided_at else None} for r in rows]
+    def _row(r: Approval):
+        return {
+            "id": str(r.id),
+            "tool_id": r.tool_id,
+            "status": r.status,
+            "requested_by": str(r.requested_by) if r.requested_by else None,
+            "created_at": str(r.created_at),
+            "decided_at": str(r.decided_at) if r.decided_at else None,
+            "executed": bool(r.executed),
+            "executed_at": str(r.executed_at) if r.executed_at else None,
+            "summary": (r.output_summary or "")[:300],
+        }
+    return [_row(r) for r in rows]
+
+
+@router.get("/{approval_id}")
+def get_approval(approval_id: str, db: Session = Depends(get_db), request: Request = None):
+    if request:
+        _require_manage(request)
+    rec = db.get(Approval, approval_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="not found")
+    return {
+        "id": str(rec.id),
+        "tenant_id": str(rec.tenant_id),
+        "tool_id": rec.tool_id,
+        "status": rec.status,
+        "requested_by": str(rec.requested_by) if rec.requested_by else None,
+        "created_at": str(rec.created_at),
+        "decided_at": str(rec.decided_at) if rec.decided_at else None,
+        "executed": bool(rec.executed),
+        "executed_at": str(rec.executed_at) if rec.executed_at else None,
+        "summary": (rec.output_summary or "")[:500],
+    }
+
+
+@router.delete("/{approval_id}")
+def delete_approval(approval_id: str, db: Session = Depends(get_db), request: Request = None):
+    if request:
+        _require_manage(request)
+    rec = db.get(Approval, approval_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="not found")
+    from sqlalchemy.sql import func as _func
+    rec.deleted_at = _func.now()
+    db.add(rec)
+    db.commit()
+    return {"status": "deleted"}
 
 
