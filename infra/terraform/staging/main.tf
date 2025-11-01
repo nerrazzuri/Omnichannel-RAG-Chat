@@ -1,3 +1,9 @@
+# Gateway module
+module "gateway" {
+  source     = "../modules/gateway"
+  namespace  = "omnichannel"
+  vault_path = "kv/gateway"
+}
 resource "kubernetes_namespace" "ns" {
   metadata {
     name = var.namespace
