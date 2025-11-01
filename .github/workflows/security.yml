@@ -1,0 +1,58 @@
+name: Security Scans
+
+on:
+  pull_request:
+  push:
+    branches: [ master ]
+
+jobs:
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install bandit
+        run: pip install bandit
+      - name: Bandit (Python SAST)
+        run: bandit -r backend/src -ll -ii -o bandit-report.json -f json
+      - name: Upload bandit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+      - name: Fail on HIGH findings
+        run: |
+          python - << 'PY'
+          import json,sys
+          data=json.load(open('bandit-report.json'))
+          highs=[i for i in data.get('results',[]) if i.get('issue_severity')=='HIGH']
+          sys.exit(1 if highs else 0)
+          PY
+
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: |
+          docker build -t ai-core:ci -f Dockerfile . || true
+      - name: Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+
+  tfsec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Terraform Security Scan
+        uses: aquasecurity/tfsec-action@v1
+        with:
+          working_directory: infra/terraform
+

@@ -1,0 +1,7 @@
+repos:
+  - repo: https://github.com/awslabs/git-secrets
+    rev: v1.3.0
+    hooks:
+      - id: git-secrets
+        args: ["--register-aws"]
+

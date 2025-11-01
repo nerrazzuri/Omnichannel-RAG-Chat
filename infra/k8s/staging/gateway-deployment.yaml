@@ -24,6 +24,11 @@ spec:
           export JWT_SECRET="{{ .Data.data.JWT_SECRET }}"
           export AI_CORE_URL="{{ .Data.data.AI_CORE_URL }}"
           {{- end -}}
+        vault.hashicorp.com/agent-inject-secret-sentry.env: "kv/gateway/sentry"
+        vault.hashicorp.com/agent-inject-template-sentry.env: |
+          {{- with secret "kv/gateway/sentry" -}}
+          export SENTRY_DSN="{{ .Data.data.DSN }}"
+          {{- end -}}
     spec:
       serviceAccountName: gateway
       containers:

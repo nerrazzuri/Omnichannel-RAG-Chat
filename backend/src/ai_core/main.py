@@ -36,6 +36,22 @@ from shared.config.tuning import cost as cost_cfg
 from shared.config.tuning import connectors as connectors_cfg
 from shared.metrics.stability_metrics import stability_metrics
 from shared.utils.log_and_continue import log_and_continue
+from shared.metrics.exception_metrics import exception_metrics
+
+# Optional Sentry init
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        environment=os.getenv("ENVIRONMENT", os.getenv("ENV", "staging")),
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_RATE", "0.1")),
+        send_default_pii=False,
+    )
+except Exception:
+    pass
 
 # Configure structured logging
 class ColorFormatter(logging.Formatter):
@@ -77,7 +93,7 @@ try:
         loaded = vault_client.load_all()
         vault_client.start_refresh()
         # Map a few critical secrets into environment so early imports see them
-        for key in ("JWT_SECRET", "OPENAI_API_KEY", "DB_PASSWORD", "QDRANT_API_KEY", "REDIS_PASSWORD", "ADMIN_UPLOAD_BEARER"):
+        for key in ("JWT_SECRET", "OPENAI_API_KEY", "DB_PASSWORD", "QDRANT_API_KEY", "REDIS_PASSWORD", "ADMIN_UPLOAD_BEARER", "SENTRY_DSN"):
             val = loaded.get(key) if isinstance(loaded, dict) else None
             if not val:
                 # Try individual fetch
@@ -104,6 +120,13 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         request.state.correlation_id = corr_id
         # add to logs
         logging.LoggerAdapter(logger, {"correlation_id": corr_id})
+        # add correlation id to sentry scope if available
+        try:
+            import sentry_sdk as _s
+            with _s.configure_scope() as scope:
+                scope.set_tag("correlation_id", corr_id)
+        except Exception:
+            pass
         response = await call_next(request)
         response.headers["X-Correlation-ID"] = corr_id
         return response
@@ -451,6 +474,12 @@ app.add_middleware(AccessControlMiddleware)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    try:
+        exception_metrics.inc()
+        import sentry_sdk as _s
+        _s.capture_exception(exc)
+    except Exception:
+        pass
     return JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {str(exc)}"}

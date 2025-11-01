@@ -8,4 +8,8 @@ data:
     export JWT_SECRET="{{ .Data.data.JWT_SECRET }}"
     export AI_CORE_URL="{{ .Data.data.AI_CORE_URL }}"
     {{- end -}}
+  gateway-sentry.tmpl: |
+    {{- with secret "kv/gateway/sentry" -}}
+    export SENTRY_DSN="{{ .Data.data.DSN }}"
+    {{- end -}}
 
