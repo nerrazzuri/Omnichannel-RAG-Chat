@@ -1,0 +1,18 @@
+groups:
+  - name: redis
+    rules:
+      - alert: RedisEvictions
+        expr: increase(redis_evicted_keys_total[5m]) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis evictions occurring"
+          runbook_url: "/docs/observability/runbooks/redis.md"
+      - alert: RedisAOFRewriteSlow
+        expr: redis_aof_last_rewrite_duration_sec > 60
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Redis AOF rewrite taking too long"
+          runbook_url: "/docs/observability/runbooks/redis.md"
+

@@ -1,0 +1,18 @@
+groups:
+  - name: ai-core
+    rules:
+      - alert: AICoreHighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(ai_core_request_latency_seconds_bucket[5m])) by (le)) > 1.5
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "AI-Core p95 latency high"
+          runbook_url: "/docs/observability/runbooks/ai-core.md"
+      - alert: AICoreHighErrorRate
+        expr: (sum(rate(ai_core_requests_total{status=~"5.."}[5m])) / sum(rate(ai_core_requests_total[5m]))) > 0.01
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "AI-Core 5xx rate >1%"
+          runbook_url: "/docs/observability/runbooks/ai-core.md"
+

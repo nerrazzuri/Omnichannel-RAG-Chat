@@ -1,0 +1,33 @@
+name: CI Observability
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Lint Grafana dashboards
+        run: |
+          python observability/grafana/lint_dashboards.py
+      - name: Validate Prometheus rules
+        run: |
+          docker run --rm -v "$PWD":/work -w /work prom/prometheus promtool check rules observability/prometheus/rules/*.yaml
+      - name: Metrics smoke (optional)
+        if: env.READINESS_API_BASE != ''
+        env:
+          READINESS_API_BASE: ${{ secrets.READINESS_API_BASE }}
+        run: |
+          set -e
+          curl -s "${READINESS_API_BASE}/metrics" | grep -E "ai_core_requests_total|ai_core_request_latency_seconds" >/dev/null || exit 1
+      - name: Frontend tests (optional)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run test -- --runInBand
+

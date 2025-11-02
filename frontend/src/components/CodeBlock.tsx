@@ -14,13 +14,14 @@ export default function CodeBlock(props: Props) {
     return <code className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-800" {...rest}>{children}</code>;
   }
   const text = code.replace(/\n$/, '');
+  const langClass = match ? `language-${match[1]}` : (className || '');
   const onCopy = async () => {
     try { await navigator.clipboard.writeText(text); } catch {}
   };
   return (
     <div className="relative group">
-      <pre className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${className || ''}`} {...rest}>
-        <code>{text}</code>
+      <pre className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${langClass}`} {...rest}>
+        <code className={langClass}>{text}</code>
       </pre>
       <button
         type="button"
