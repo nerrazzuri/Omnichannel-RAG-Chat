@@ -42,5 +42,3 @@ class NormalizedMessage(BaseModel):
     text: str
     message_type: str = "text"
     metadata: Dict[str, Any] = Field(default_factory=dict)
-
-

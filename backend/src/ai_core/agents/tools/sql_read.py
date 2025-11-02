@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-from .base import ToolSpec, Tool
+from .base import ToolSpec
 from shared.config.tuning import agents as agent_cfg
 from shared.metrics.agent_tool_metrics import agent_tool_metrics
 from shared.throttling.agent_limits import allow_tool_call
-from shared.security.pii import redact
 from sqlalchemy import text as _sql
 from shared.database.session import SessionLocal
 
@@ -17,7 +16,17 @@ class SQLReadTool:
         version="1.0.0",
         description="Execute read-only named or parameterized queries against allowlisted connections.",
         category="read",
-        input_schema={"type": "object", "properties": {"connection_id": {"type": "string"}, "named_query": {"type": "string"}, "query": {"type": "string"}, "params": {"type": "object"}, "limit": {"type": "integer"}}, "required": ["connection_id"]},
+        input_schema={
+            "type": "object",
+            "properties": {
+                "connection_id": {"type": "string"},
+                "named_query": {"type": "string"},
+                "query": {"type": "string"},
+                "params": {"type": "object"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["connection_id"],
+        },
         output_schema={"type": "object"},
         required_scope="agent:tool:sql.read",
         timeout_ms=agent_cfg.tool_default_timeout_ms,
@@ -25,7 +34,9 @@ class SQLReadTool:
         rate_limit_qps=agent_cfg.rate_limit_qps_per_tool,
     )
 
-    def execute(self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(
+        self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         tool = self.spec.tool_id
         agent_tool_metrics.inc_call(tenant_id, tool)
         if not allow_tool_call(tenant_id, tool, self.spec.rate_limit_qps):
@@ -38,7 +49,10 @@ class SQLReadTool:
         q = payload.get("named_query") or payload.get("query")
         if not q:
             return {"status": "error", "error": "missing query"}
-        if any(x in q.lower() for x in ("update ", "delete ", "insert ", "drop ", "alter ", "create ")):
+        if any(
+            x in q.lower()
+            for x in ("update ", "delete ", "insert ", "drop ", "alter ", "create ")
+        ):
             return {"status": "denied", "reason": "write_statement_blocked"}
         sql = f"{q} LIMIT {limit}"
         s = SessionLocal()
@@ -55,5 +69,3 @@ class SQLReadTool:
 
 
 sql_read_tool = SQLReadTool()
-
-

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from typing import Optional
 
 from shared.cache.redis import redis_cache
@@ -12,10 +11,18 @@ class Throttle:
         return f"throttle:{kind}:{tenant_id}:concurrent"
 
     def _cap_for(self, tenant_tier: Optional[str], kind: str) -> int:
-        tier = (tenant_tier or '').upper() or 'BASIC'
-        if kind == 'llm':
-            return int(throttle_cfg.tier_llm_caps.get(tier, throttle_cfg.llm_concurrency_default))
-        return int(throttle_cfg.tier_embed_caps.get(tier, throttle_cfg.embed_concurrency_default))
+        tier = (tenant_tier or "").upper() or "BASIC"
+        if kind == "llm":
+            return int(
+                throttle_cfg.tier_llm_caps.get(
+                    tier, throttle_cfg.llm_concurrency_default
+                )
+            )
+        return int(
+            throttle_cfg.tier_embed_caps.get(
+                tier, throttle_cfg.embed_concurrency_default
+            )
+        )
 
     def acquire(self, tenant_id: str, kind: str, tenant_tier: Optional[str]) -> bool:
         cli = redis_cache.get_client()
@@ -46,5 +53,3 @@ class Throttle:
 
 
 throttle = Throttle()
-
-

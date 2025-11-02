@@ -26,7 +26,9 @@ class CircuitBreaker:
         return int(time.time() * 1000)
 
     def _key(self, service: str, tenant_id: Optional[str]) -> str:
-        return f"{service}:{tenant_id}" if (cb_cfg.tenant_aware and tenant_id) else service
+        return (
+            f"{service}:{tenant_id}" if (cb_cfg.tenant_aware and tenant_id) else service
+        )
 
     def allow(self, service: str, tenant_id: Optional[str]) -> bool:
         k = self._key(service, tenant_id)
@@ -56,7 +58,10 @@ class CircuitBreaker:
         with self._lock:
             st, failures, opened = self._state.get(k, (self.CLOSED, 0, 0))
             failures += 1
-            if st in (self.CLOSED, self.HALF_OPEN) and failures >= cb_cfg.failure_threshold:
+            if (
+                st in (self.CLOSED, self.HALF_OPEN)
+                and failures >= cb_cfg.failure_threshold
+            ):
                 self._state[k] = (self.OPEN, failures, self._now_ms())
             else:
                 self._state[k] = (st, failures, opened)
@@ -69,5 +74,3 @@ class CircuitBreaker:
 
 
 circuit_breaker = CircuitBreaker()
-
-

@@ -17,9 +17,9 @@ class CrossEncoderReranker:
         label_map: Dict[str, str] = {}
         if rich_hits:
             for h in rich_hits:
-                txt = (h.get('content') or '').strip()
-                meta = h.get('meta') or {}
-                row_map = meta.get('row') if isinstance(meta, dict) else None
+                txt = (h.get("content") or "").strip()
+                meta = h.get("meta") or {}
+                row_map = meta.get("row") if isinstance(meta, dict) else None
                 if txt and isinstance(row_map, dict) and row_map:
                     # format labeled row
                     parts = []
@@ -31,7 +31,12 @@ class CrossEncoderReranker:
                         label_map[txt] = " | ".join(parts)
         if content_to_row:
             for txt, row_map in content_to_row.items():
-                if txt and txt not in label_map and isinstance(row_map, dict) and row_map:
+                if (
+                    txt
+                    and txt not in label_map
+                    and isinstance(row_map, dict)
+                    and row_map
+                ):
                     parts = []
                     for k, v in row_map.items():
                         if v is None:
@@ -41,14 +46,16 @@ class CrossEncoderReranker:
                         label_map[txt] = " | ".join(parts)
         return label_map
 
-    def _bi_encoder_scores_from_hits(self, documents: List[str], rich_hits: Optional[List[Dict[str, Any]]]) -> List[float]:
+    def _bi_encoder_scores_from_hits(
+        self, documents: List[str], rich_hits: Optional[List[Dict[str, Any]]]
+    ) -> List[float]:
         scores = [1.0] * len(documents)
         if not rich_hits:
             return scores
         c2s = {}
         for h in rich_hits:
-            c = h.get('content')
-            s = h.get('score')
+            c = h.get("content")
+            s = h.get("score")
             if isinstance(c, str):
                 try:
                     c2s[c] = max(float(s), c2s.get(c, 0.0))
@@ -89,5 +96,3 @@ class CrossEncoderReranker:
             return docs
         except Exception:
             return documents
-
-

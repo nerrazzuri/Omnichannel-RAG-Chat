@@ -3,11 +3,11 @@ Structured logging utilities with correlation IDs and audit trails.
 """
 import logging
 import logging.config
-import json
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime
 import structlog
+
 
 # Configure structlog for structured logging
 def configure_structured_logging(log_level: str = "INFO") -> None:
@@ -23,7 +23,7 @@ def configure_structured_logging(log_level: str = "INFO") -> None:
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer()
+            structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -41,15 +41,18 @@ def configure_structured_logging(log_level: str = "INFO") -> None:
 
     # Add JSON handler
     handler = logging.StreamHandler()
-    handler.setFormatter(structlog.stdlib.ProcessorFormatter(
-        processor=structlog.processors.JSONRenderer(),
-        foreign_pre_chain=[
-            structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
-        ]
-    ))
+    handler.setFormatter(
+        structlog.stdlib.ProcessorFormatter(
+            processor=structlog.processors.JSONRenderer(),
+            foreign_pre_chain=[
+                structlog.stdlib.filter_by_level,
+                structlog.stdlib.add_logger_name,
+                structlog.stdlib.add_log_level,
+            ],
+        )
+    )
     root_logger.addHandler(handler)
+
 
 class StructuredLogger:
     """Structured logger with correlation IDs and audit trails."""
@@ -64,7 +67,7 @@ class StructuredLogger:
         correlation_id: Optional[str] = None,
         user_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         """Log with structured context."""
         context = {
@@ -104,7 +107,7 @@ class StructuredLogger:
         conversation_id: str,
         user_id: str,
         tenant_id: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """Log conversation-related events."""
         self.info(
@@ -113,7 +116,7 @@ class StructuredLogger:
             conversation_id=conversation_id,
             user_id=user_id,
             tenant_id=tenant_id,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
     def log_rag_query(
@@ -122,7 +125,7 @@ class StructuredLogger:
         response_confidence: float,
         context_docs_count: int,
         tenant_id: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
     ):
         """Log RAG query events."""
         self.info(
@@ -131,7 +134,7 @@ class StructuredLogger:
             response_confidence=response_confidence,
             context_docs_count=context_docs_count,
             tenant_id=tenant_id,
-            user_id=user_id
+            user_id=user_id,
         )
 
     def log_authentication_event(
@@ -140,7 +143,7 @@ class StructuredLogger:
         user_id: str,
         tenant_id: str,
         success: bool,
-        method: str = "unknown"
+        method: str = "unknown",
     ):
         """Log authentication events."""
         self.info(
@@ -149,8 +152,9 @@ class StructuredLogger:
             user_id=user_id,
             tenant_id=tenant_id,
             success=success,
-            auth_method=method
+            auth_method=method,
         )
+
 
 # Global logger instance
 logger = StructuredLogger()

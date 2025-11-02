@@ -1,0 +1,69 @@
+{
+  "title": "Compliance Overview",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5m",
+  "panels": [
+    {
+      "type": "gauge",
+      "title": "Report Freshness (hours)",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "options": {
+        "reduceOptions": {"calcs": ["last"], "values": false},
+        "showThresholdLabels": true,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "expr": "(time() - ai_core_compliance_last_run_timestamp) / 3600",
+          "legendFormat": "hours"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "yellow", "value": 12},
+              {"color": "red", "value": 24}
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Non-Compliant Tenants",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "options": {
+        "reduceOptions": {"calcs": ["last"], "values": false}
+      },
+      "targets": [
+        {
+          "expr": "ai_core_compliance_noncompliant_tenants_total",
+          "legendFormat": "noncompliant"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Failed Report Generations",
+      "gridPos": {"h": 8, "w": 16, "x": 0, "y": 8},
+      "targets": [
+        {
+          "expr": "increase(ai_core_compliance_failed_reports_total[24h])",
+          "legendFormat": "failures (24h)"
+        }
+      ],
+      "lines": true,
+      "fill": 1,
+      "linewidth": 2
+    }
+  ]
+}
+
+

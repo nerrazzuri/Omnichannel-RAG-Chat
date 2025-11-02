@@ -41,5 +41,3 @@ class GoogleDriveConnector(BaseConnector):
             classification="internal",
             metadata={"connector": self.name},
         )
-
-

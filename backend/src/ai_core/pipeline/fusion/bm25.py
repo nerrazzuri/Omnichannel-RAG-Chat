@@ -13,7 +13,11 @@ class StandardBM25:
         self.doc_freqs: List[ColCounter] = []
         self.vocab: List[str] = []
         self.idf: Dict[str, float] = {}
-        self.avgdl = (sum(len(doc.split()) for doc in corpus) / self.doc_count) if self.doc_count else 0.0
+        self.avgdl = (
+            (sum(len(doc.split()) for doc in corpus) / self.doc_count)
+            if self.doc_count
+            else 0.0
+        )
         self._build_stats()
 
     def _build_stats(self) -> None:
@@ -47,9 +51,9 @@ class StandardBM25:
                 if tf <= 0.0:
                     continue
                 idf = self.idf.get(t, 0.0)
-                denom = tf + self.k1 * (1 - self.b + self.b * (dl / max(1.0, self.avgdl)))
+                denom = tf + self.k1 * (
+                    1 - self.b + self.b * (dl / max(1.0, self.avgdl))
+                )
                 s += idf * ((tf * (self.k1 + 1)) / max(1e-9, denom))
             scores.append(s)
         return scores
-
-

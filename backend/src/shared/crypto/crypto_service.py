@@ -38,5 +38,3 @@ class CryptoService:
 
 
 crypto_service = CryptoService()
-
-

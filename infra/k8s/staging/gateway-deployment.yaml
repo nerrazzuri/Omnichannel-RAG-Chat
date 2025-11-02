@@ -31,12 +31,20 @@ spec:
           {{- end -}}
     spec:
       serviceAccountName: gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
       containers:
         - name: gateway
           image: nerrazzuri/omnichannel-gateway:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3001
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: NODE_ENV
               value: "staging"
@@ -59,6 +67,13 @@ spec:
               port: 3001
             initialDelaySeconds: 10
             periodSeconds: 15
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
       volumes:
         - name: vault-secrets
           emptyDir: {}
@@ -79,11 +94,19 @@ spec:
       labels:
         app: gateway
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
       containers:
         - name: gateway
           image: ghcr.io/example/gateway:latest
           ports:
             - containerPort: 3001
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: AI_CORE_URL
               value: http://ai-core:8000
@@ -104,6 +127,13 @@ spec:
               port: 3001
             initialDelaySeconds: 10
             periodSeconds: 15
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
 ---
 apiVersion: v1
 kind: Service

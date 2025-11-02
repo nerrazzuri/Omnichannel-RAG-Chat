@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import secrets
-import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
@@ -39,7 +37,11 @@ class ApiKeyResponse(BaseModel):
 
 
 @router.post("/create", response_model=ApiKeyResponse)
-def create_api_key(req: ApiKeyCreateRequest, db: Session = Depends(get_db), claims: Dict[str, Any] = Depends(require("admin:apikeys"))):
+def create_api_key(
+    req: ApiKeyCreateRequest,
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require("admin:apikeys")),
+):
     # Cross-tenant protection: only ADMIN of same tenant or global admin allowed
     if str(claims.get("role")) != "ADMIN":
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -74,19 +76,25 @@ def create_api_key(req: ApiKeyCreateRequest, db: Session = Depends(get_db), clai
 
 
 @router.get("/list", response_model=List[ApiKeyResponse])
-def list_api_keys(tenant_id: str, db: Session = Depends(get_db), claims: Dict[str, Any] = Depends(require("admin:apikeys"))):
+def list_api_keys(
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require("admin:apikeys")),
+):
     q = db.query(ApiKey).filter(ApiKey.tenant_id == tenant_id).all()
     out: List[ApiKeyResponse] = []
     for r in q:
-        out.append(ApiKeyResponse(
-            id=str(r.id),
-            tenant_id=str(r.tenant_id),
-            name=r.name,
-            scopes=r.scopes or [],
-            created_at=r.created_at,
-            expires_at=r.expires_at,
-            rate_limit_per_minute=r.rate_limit_per_minute,
-        ))
+        out.append(
+            ApiKeyResponse(
+                id=str(r.id),
+                tenant_id=str(r.tenant_id),
+                name=r.name,
+                scopes=r.scopes or [],
+                created_at=r.created_at,
+                expires_at=r.expires_at,
+                rate_limit_per_minute=r.rate_limit_per_minute,
+            )
+        )
     return out
 
 
@@ -95,7 +103,11 @@ class ApiKeyRevokeRequest(BaseModel):
 
 
 @router.post("/revoke")
-def revoke_api_key(req: ApiKeyRevokeRequest, db: Session = Depends(get_db), claims: Dict[str, Any] = Depends(require("admin:apikeys"))):
+def revoke_api_key(
+    req: ApiKeyRevokeRequest,
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require("admin:apikeys")),
+):
     rec = db.get(ApiKey, req.id)
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
@@ -103,5 +115,3 @@ def revoke_api_key(req: ApiKeyRevokeRequest, db: Session = Depends(get_db), clai
     db.add(rec)
     db.commit()
     return {"ok": True}
-
-

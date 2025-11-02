@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 import time
 from typing import List, Tuple
 import logging
@@ -25,7 +24,9 @@ class ConnectorScheduler:
         self._tenants = tenants
         self._interval = connectors.default_interval_s
         # Parse enabled names
-        self._names = [n.strip() for n in connectors.enabled_names.split(',') if n.strip()]
+        self._names = [
+            n.strip() for n in connectors.enabled_names.split(",") if n.strip()
+        ]
         self._log = logging.getLogger(__name__)
 
     def stop(self) -> None:
@@ -38,11 +39,11 @@ class ConnectorScheduler:
         # Optional manifest JSON mapping {"connectors":[{"name":"sharepoint","tenants":["..."]}, ...]}
         try:
             if connectors.manifest_json_path:
-                with open(connectors.manifest_json_path, 'r', encoding='utf-8') as f:
+                with open(connectors.manifest_json_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                for item in (data.get('connectors') or []):
-                    nm = str(item.get('name','')).strip()
-                    for tid in (item.get('tenants') or []):
+                for item in data.get("connectors") or []:
+                    nm = str(item.get("name", "")).strip()
+                    for tid in item.get("tenants") or []:
                         pairs.append((str(tid), nm))
         except Exception as e:
             self._log.warning(f"Connector manifest load failed: {e}")
@@ -58,13 +59,16 @@ class ConnectorScheduler:
                 try:
                     from shared.database.session import SessionLocal
                     from shared.database.models import Tenant
+
                     s = SessionLocal()
                     try:
                         tids = [str(t.id) for t in s.query(Tenant.id).all()]
                     finally:
                         s.close()
                 except Exception as e:
-                    self._log.warning(f"Tenant discovery failed: {e}; using provided list")
+                    self._log.warning(
+                        f"Tenant discovery failed: {e}; using provided list"
+                    )
                     tids = list(self._tenants)
                 for tenant in tids:
                     for name in self._names:
@@ -79,9 +83,15 @@ class ConnectorScheduler:
                     c.run_sync()
                 except Exception as e:
                     # Log connector-specific errors with context
-                    self._log.exception(f"Connector run failed", extra={"tenant_id": tenant, "connector": name, "module_name": "scheduler", "action": "connector.sync"})
+                    self._log.exception(
+                        f"Connector run failed",
+                        extra={
+                            "tenant_id": tenant,
+                            "connector": name,
+                            "module_name": "scheduler",
+                            "action": "connector.sync",
+                        },
+                    )
             elapsed = time.time() - start
             sleep_s = max(1.0, self._interval - elapsed)
             time.sleep(sleep_s)
-
-

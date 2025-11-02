@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 
 class SemanticContextInterpreter:
@@ -13,13 +13,23 @@ class SemanticContextInterpreter:
       - list of interpreted sentences/paragraphs (same length <= contexts length)
     """
 
-    def __init__(self, max_fields_per_context: int = 8, synonyms_map: Optional[Dict[str, str]] = None):
+    def __init__(
+        self,
+        max_fields_per_context: int = 8,
+        synonyms_map: Optional[Dict[str, str]] = None,
+    ):
         self.max_fields_per_context = max_fields_per_context
         # Maps alias (normalized) -> canonical label
         self.synonyms_map: Dict[str, str] = (synonyms_map or {}).copy()
         self._learned: Dict[str, str] = {}
 
-    def interpret(self, query: str, contexts: List[str], schema_fields: Optional[List[str]] = None, synonyms_map: Optional[Dict[str, str]] = None) -> List[str]:
+    def interpret(
+        self,
+        query: str,
+        contexts: List[str],
+        schema_fields: Optional[List[str]] = None,
+        synonyms_map: Optional[Dict[str, str]] = None,
+    ) -> List[str]:
         if not contexts:
             return []
         if isinstance(synonyms_map, dict) and synonyms_map:
@@ -43,7 +53,9 @@ class SemanticContextInterpreter:
         parts = [p.strip() for p in t.replace("\n", " ").split(".") if p.strip()]
         return parts[0] + ("." if parts else "")
 
-    def _humanize_labeled_row(self, ql: str, context: str, schema_fields: Optional[List[str]]) -> List[str]:
+    def _humanize_labeled_row(
+        self, ql: str, context: str, schema_fields: Optional[List[str]]
+    ) -> List[str]:
         # Parse key: value pairs from "A: x | B: y" or multiline
         kvs: Dict[str, str] = {}
         raw = (context or "").replace("\n", " | ")
@@ -78,7 +90,9 @@ class SemanticContextInterpreter:
             tokens = set([t for t in ql.split() if len(t) > 2])
             for k, v in kvs.items():
                 kn = self._normalize_field_name(k)
-                if (any(t in kn for t in tokens)) or (any(t in v.lower() for t in tokens)):
+                if (any(t in kn for t in tokens)) or (
+                    any(t in v.lower() for t in tokens)
+                ):
                     keep[k] = v
         # If nothing matched, keep a small subset (up to max_fields_per_context)
         if not keep:
@@ -136,6 +150,7 @@ class SemanticContextInterpreter:
 
     def _normalize_field_name(self, key: str) -> str:
         import re
+
         k = (key or "").strip()
         k = k.replace("__", "_")
         # Split camelCase → camel Case
@@ -155,6 +170,7 @@ class SemanticContextInterpreter:
 
     def _render_value(self, val: str) -> str:
         import re
+
         v = (val or "").strip()
         if not v:
             return v
@@ -179,7 +195,14 @@ class SemanticContextInterpreter:
         mapping = {
             "manager": {"manager", "supervisor", "reporting manager", "boss"},
             "department": {"department", "dept", "division", "team", "unit"},
-            "position": {"position", "title", "job title", "job", "designation", "role"},
+            "position": {
+                "position",
+                "title",
+                "job title",
+                "job",
+                "designation",
+                "role",
+            },
             "city": {"city", "town"},
             "state": {"state", "province", "region"},
             "country": {"country", "nation"},
@@ -224,7 +247,9 @@ class SemanticContextInterpreter:
                 return v
         return None
 
-    def _compose_role_sentence(self, name: Optional[str], kvs: Dict[str, str]) -> Optional[str]:
+    def _compose_role_sentence(
+        self, name: Optional[str], kvs: Dict[str, str]
+    ) -> Optional[str]:
         position = self._find_first_by_canon(kvs, {"position"})
         dept = self._find_first_by_canon(kvs, {"department"})
         subj = name or "This record"
@@ -236,7 +261,9 @@ class SemanticContextInterpreter:
             return f"{subj} works in the {dept} department."
         return None
 
-    def _compose_location_sentence(self, name: Optional[str], kvs: Dict[str, str]) -> Optional[str]:
+    def _compose_location_sentence(
+        self, name: Optional[str], kvs: Dict[str, str]
+    ) -> Optional[str]:
         city = self._find_first_by_canon(kvs, {"city"})
         state = self._find_first_by_canon(kvs, {"state"})
         country = self._find_first_by_canon(kvs, {"country"})
@@ -254,5 +281,3 @@ class SemanticContextInterpreter:
         if country:
             return f"{subj} is based in {country}."
         return None
-
-

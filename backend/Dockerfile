@@ -2,7 +2,8 @@
 # Multi-stage build for Python FastAPI application
 
 # Stage 1: Build stage
-FROM python:3.11-slim-bookworm AS builder
+ARG PY_BASE_IMAGE=python:3.11-slim-bookworm
+FROM ${PY_BASE_IMAGE} AS builder
 
 # Set working directory
 WORKDIR /app
@@ -67,7 +68,8 @@ else:
 PY
 
 # Stage 2: Production stage
-FROM python:3.11-slim-bookworm
+ARG PY_RUN_IMAGE=python:3.11-slim-bookworm
+FROM ${PY_RUN_IMAGE}
 
 # Create non-root user (with home directory)
 RUN groupadd -r appuser && useradd -m -r -g appuser appuser

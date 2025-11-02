@@ -12,13 +12,21 @@ from shared.config.tuning import telemetry
 class RetrievalMetrics:
     def __init__(self) -> None:
         if telemetry.enable_metrics and Counter is not None:
-            self.bm25_hits = Counter('ai_core_bm25_cache_hits_total', 'BM25 cache hits', ['tenant'])
-            self.bm25_miss = Counter('ai_core_bm25_cache_miss_total', 'BM25 cache misses', ['tenant'])
+            self.bm25_hits = Counter(
+                "ai_core_bm25_cache_hits_total", "BM25 cache hits", ["tenant"]
+            )
+            self.bm25_miss = Counter(
+                "ai_core_bm25_cache_miss_total", "BM25 cache misses", ["tenant"]
+            )
         else:
             self.bm25_hits = None
             self.bm25_miss = None
         if telemetry.enable_metrics and Gauge is not None:
-            self.duckdb_active = Gauge('ai_core_duckdb_connections_active', 'Active DuckDB connections', ['tenant'])
+            self.duckdb_active = Gauge(
+                "ai_core_duckdb_connections_active",
+                "Active DuckDB connections",
+                ["tenant"],
+            )
         else:
             self.duckdb_active = None
 
@@ -45,5 +53,3 @@ class RetrievalMetrics:
 
 
 retrieval_metrics = RetrievalMetrics()
-
-

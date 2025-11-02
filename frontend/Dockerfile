@@ -1,7 +1,8 @@
 # Multi-stage build for Next.js frontend
 
 # Stage 1: Build stage
-FROM node:20-alpine AS builder
+ARG NODE_BUILD_IMAGE=node:20-alpine
+FROM ${NODE_BUILD_IMAGE} AS builder
 
 # Set working directory
 WORKDIR /app
@@ -19,7 +20,8 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production stage
-FROM node:20-alpine AS runner
+ARG NODE_RUN_IMAGE=node:20-alpine
+FROM ${NODE_RUN_IMAGE} AS runner
 
 # Set working directory
 WORKDIR /app

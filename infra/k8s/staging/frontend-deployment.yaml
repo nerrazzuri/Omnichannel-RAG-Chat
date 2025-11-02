@@ -13,11 +13,19 @@ spec:
       labels:
         app: frontend
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
       containers:
         - name: frontend
           image: ghcr.io/nerrazzuri/omni-frontend:staging
           ports:
             - containerPort: 3000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: AI_CORE_URL
               value: http://ai-core:8000
@@ -31,6 +39,13 @@ spec:
               path: /
               port: 3000
             initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
 ---
 apiVersion: v1
 kind: Service

@@ -11,19 +11,36 @@ spec:
       backoffLimit: 1
       template:
         spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
           restartPolicy: OnFailure
           containers:
             - name: qdrant-backup
-              image: curlimages/curl:8.7.1
-              command: ["/bin/sh", "-lc"]
+              image: amazon/aws-cli:2.15.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/bash", "-lc"]
               args:
                 - |
-                  set -e
-                  TS=$(date +%s)
-                  # Snapshot all collections (placeholder endpoint; adjust to your Qdrant API)
-                  curl -s -X POST http://qdrant:6333/collections/_all/snapshots || true
-                  SIZE=0
-                  curl -s -X POST http://ai-core:8000/v1/admin/backup/mark \
-                    -H 'Content-Type: application/json' \
-                    -d "{\"system\":\"qdrant\",\"status\":\"success\",\"duration_ms\":0,\"size_bytes\":$SIZE,\"ts_unix\":$TS}" || true
+                  set -euo pipefail
+                  /bin/bash /scripts/qdrant_backup.sh
+              volumeMounts:
+                - name: backup-scripts
+                  mountPath: /scripts
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "300m"
+                  memory: "256Mi"
+          volumes:
+            - name: backup-scripts
+              configMap:
+                name: backup-scripts
 

@@ -13,11 +13,20 @@ spec:
       labels:
         app: ai-core
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
       containers:
         - name: ai-core
           image: ghcr.io/nerrazzuri/omni-ai-core:staging
           ports:
             - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: DATABASE_URL
               value: postgresql://user:password@postgres:5432/omni
@@ -35,6 +44,13 @@ spec:
               path: /v1/health
               port: 8000
             initialDelaySeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
 ---
 apiVersion: v1
 kind: Service

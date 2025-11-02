@@ -20,19 +20,19 @@ class RankFusion:
         # Build candidate list
         candidates = list(bm25_texts or [])
         vec_map: Dict[str, float] = {}
-        for h in (dense_hits or []):
-            t = (h.get('content') or '')
+        for h in dense_hits or []:
+            t = h.get("content") or ""
             if not t:
                 continue
-            vec_map[t] = max(vec_map.get(t, 0.0), float(h.get('score') or 0.0))
+            vec_map[t] = max(vec_map.get(t, 0.0), float(h.get("score") or 0.0))
             if t not in candidates:
                 candidates.append(t)
         fv_map: Dict[str, float] = {}
-        for h in (field_value_hits or []):
-            t = (h.get('content') or '')
+        for h in field_value_hits or []:
+            t = h.get("content") or ""
             if not t:
                 continue
-            fv_map[t] = max(fv_map.get(t, 0.0), float(h.get('score') or 0.0))
+            fv_map[t] = max(fv_map.get(t, 0.0), float(h.get("score") or 0.0))
             if t not in candidates:
                 candidates.append(t)
         if not candidates:
@@ -40,7 +40,9 @@ class RankFusion:
         # BM25 ranks
         bm = StandardBM25(candidates)
         bm_scores = bm.score(query)
-        ranked_bm = sorted([(s, i) for i, s in enumerate(bm_scores)], key=lambda x: x[0], reverse=True)
+        ranked_bm = sorted(
+            [(s, i) for i, s in enumerate(bm_scores)], key=lambda x: x[0], reverse=True
+        )
         bm25_ranking: Dict[str, int] = {}
         for rnk, (_s, idx) in enumerate(ranked_bm):
             bm25_ranking[candidates[idx]] = rnk
@@ -57,18 +59,27 @@ class RankFusion:
             for rnk, (t, _sc) in enumerate(sorted_fv):
                 fv_ranking[t] = rnk
         # RRF weights
-        k_rrf = getattr(retrieval, 'rrf_k', 60)
-        w_bm = getattr(retrieval, 'rrf_w_bm25', 0.4)
-        w_vec = getattr(retrieval, 'rrf_w_dense', 0.5)
-        w_fv = getattr(retrieval, 'rrf_w_field_values', 0.6)
+        k_rrf = getattr(retrieval, "rrf_k", 60)
+        w_bm = getattr(retrieval, "rrf_w_bm25", 0.4)
+        w_vec = getattr(retrieval, "rrf_w_dense", 0.5)
+        w_fv = getattr(retrieval, "rrf_w_field_values", 0.6)
         # Adaptive per-tenant overrides
         if tenant_id:
             try:
                 from shared.database.session import SessionLocal
                 from shared.database.models import TenantRerankConfig
+
                 s = SessionLocal()
                 try:
-                    cfg = s.query(TenantRerankConfig).filter(TenantRerankConfig.tenant_id == tenant_id, TenantRerankConfig.active == True).order_by(TenantRerankConfig.updated_at.desc()).first()  # noqa: E712
+                    cfg = (
+                        s.query(TenantRerankConfig)
+                        .filter(
+                            TenantRerankConfig.tenant_id == tenant_id,
+                            TenantRerankConfig.active == True,
+                        )
+                        .order_by(TenantRerankConfig.updated_at.desc())
+                        .first()
+                    )  # noqa: E712
                     if cfg:
                         w_bm = float(cfg.w_bm25) / 100.0
                         w_vec = float(cfg.w_dense) / 100.0
@@ -92,6 +103,6 @@ class RankFusion:
             scores[t] = s
         fused = [t for t, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
         # Dedup using hit-aware keys
-        return self._merger.deduplicate_hits(fused, dense_hits=dense_hits, field_value_hits=field_value_hits, cap=30)
-
-
+        return self._merger.deduplicate_hits(
+            fused, dense_hits=dense_hits, field_value_hits=field_value_hits, cap=30
+        )

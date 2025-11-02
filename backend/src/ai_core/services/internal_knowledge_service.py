@@ -19,7 +19,9 @@ class InternalKnowledgeService:
         docs = self.db.execute(stmt).scalars().all()
         return [{"id": str(d.id), "title": d.title, "status": d.status} for d in docs]
 
-    def update_document(self, role: str, document_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_document(
+        self, role: str, document_id: str, updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
         if not has_permission(role, Permission.KB_EDIT):
             raise PermissionError("Insufficient permissions to edit knowledge base")
         doc = self.db.get(Document, document_id)
@@ -33,5 +35,3 @@ class InternalKnowledgeService:
         self.db.commit()
         self.db.refresh(doc)
         return {"id": str(doc.id), "title": doc.title, "status": doc.status}
-
-

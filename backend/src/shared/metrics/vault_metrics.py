@@ -3,11 +3,21 @@ from prometheus_client import Counter
 
 class _VaultMetrics:
     def __init__(self) -> None:
-        self._fetch_total = Counter("ai_core_vault_fetch_total", "Vault secret fetch attempts", ["result"])  # result=success|failure|cache
-        self._cache_hits_total = Counter("ai_core_vault_cache_hits_total", "Vault client cache hits", [])
-        self._failures_total = Counter("ai_core_vault_failures_total", "Vault fetch failures", ["reason"])  # reason=http|decode|auth|other
-        self._rotations_total = Counter("ai_core_vault_rotations_total", "Detected secret rotations", ["key"])  # key hashed
-        self._audit_events_total = Counter("ai_core_vault_audit_events_total", "Vault fetch audit events", [])
+        self._fetch_total = Counter(
+            "ai_core_vault_fetch_total", "Vault secret fetch attempts", ["result"]
+        )  # result=success|failure|cache
+        self._cache_hits_total = Counter(
+            "ai_core_vault_cache_hits_total", "Vault client cache hits", []
+        )
+        self._failures_total = Counter(
+            "ai_core_vault_failures_total", "Vault fetch failures", ["reason"]
+        )  # reason=http|decode|auth|other
+        self._rotations_total = Counter(
+            "ai_core_vault_rotations_total", "Detected secret rotations", ["key"]
+        )  # key hashed
+        self._audit_events_total = Counter(
+            "ai_core_vault_audit_events_total", "Vault fetch audit events", []
+        )
 
     def inc_fetch_success(self) -> None:
         self._fetch_total.labels(result="success").inc()
@@ -28,5 +38,3 @@ class _VaultMetrics:
 
 
 vault_metrics = _VaultMetrics()
-
-

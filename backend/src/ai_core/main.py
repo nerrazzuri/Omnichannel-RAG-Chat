@@ -1,7 +1,7 @@
 """
 FastAPI application for AI Core - RAG-powered conversational AI service.
 """
-from fastapi import FastAPI, HTTPException, status, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
@@ -19,6 +19,9 @@ from .api.v1.reranker import router as reranker_router
 from ai_core.api.v1.admin.api_keys import router as apikey_router
 from ai_core.api.v1.admin.rerank import router as rerank_admin_router
 from ai_core.api.v1.admin.backup import router as backup_admin_router
+from ai_core.api.v1.admin.restore import router as restore_admin_router
+from ai_core.api.v1.admin.retention import router as retention_admin_router
+from ai_core.api.v1.admin.compliance import router as compliance_admin_router
 from ai_core.api.v1.feedback import router as feedback_router
 from ai_core.api.v1.agent.approvals import router as approvals_router
 from shared.database.session import create_tables, SessionLocal
@@ -30,7 +33,6 @@ import time
 from shared.vector.qdrant import qdrant_service
 from shared.queue.retry_queue import retry_queue
 from ai_core.pipeline.embedding.embedding_service import EmbeddingService
-from shared.metrics.reliability_metrics import reliability_metrics
 from shared.config.tuning import qdrant_recovery
 from shared.metrics.cost_aggregator import rolling_cost
 from shared.config.tuning import cost as cost_cfg
@@ -46,6 +48,7 @@ try:
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
     sentry_sdk.init(
         dsn=os.getenv("SENTRY_DSN"),
         integrations=[FastApiIntegration(), SqlalchemyIntegration()],
@@ -56,27 +59,31 @@ try:
 except Exception:
     pass
 
+
 # Configure structured logging
 class ColorFormatter(logging.Formatter):
     COLORS = {
-        'DEBUG': '\x1b[36m',      # Cyan
-        'INFO': '\x1b[32m',       # Green
-        'WARNING': '\x1b[33m',    # Yellow
-        'ERROR': '\x1b[31m',      # Red
-        'CRITICAL': '\x1b[41m',   # Red background
+        "DEBUG": "\x1b[36m",  # Cyan
+        "INFO": "\x1b[32m",  # Green
+        "WARNING": "\x1b[33m",  # Yellow
+        "ERROR": "\x1b[31m",  # Red
+        "CRITICAL": "\x1b[41m",  # Red background
     }
-    RESET = '\x1b[0m'
+    RESET = "\x1b[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        level_color = self.COLORS.get(record.levelname, '')
+        level_color = self.COLORS.get(record.levelname, "")
         msg = super().format(record)
         if level_color:
             return f"{level_color}{msg}{self.RESET}"
         return msg
 
+
 handler = logging.StreamHandler()
 handler.setLevel(logging.INFO)
-handler.setFormatter(ColorFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+handler.setFormatter(
+    ColorFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -86,17 +93,27 @@ app_logger = logging.getLogger(__name__)
 # Correlation ID middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid as _uuid
+
 # Initialize Vault secrets BEFORE importing auth middleware (which reads JWT at import)
 try:
     from shared.config.tuning import vault as vault_cfg
+
     if vault_cfg.enabled:
         from shared.security.vault_client import vault_client
-        from shared.security.secret_manager import secret_manager
+
         # Load all under ai_core path and start background refresh
         loaded = vault_client.load_all()
         vault_client.start_refresh()
         # Map a few critical secrets into environment so early imports see them
-        for key in ("JWT_SECRET", "OPENAI_API_KEY", "DB_PASSWORD", "QDRANT_API_KEY", "REDIS_PASSWORD", "ADMIN_UPLOAD_BEARER", "SENTRY_DSN"):
+        for key in (
+            "JWT_SECRET",
+            "OPENAI_API_KEY",
+            "DB_PASSWORD",
+            "QDRANT_API_KEY",
+            "REDIS_PASSWORD",
+            "ADMIN_UPLOAD_BEARER",
+            "SENTRY_DSN",
+        ):
             val = loaded.get(key) if isinstance(loaded, dict) else None
             if not val:
                 # Try individual fetch
@@ -109,12 +126,15 @@ try:
                     raise RuntimeError(f"Missing required secret from Vault: {key}")
 except Exception as _e:
     # If Vault enabled but fetch failed in prod, abort startup
-    if os.getenv("ENV", "dev").lower() not in ("dev", "local", "test") and os.getenv("VAULT_ENABLED", "false").lower() in ("1","true","yes"):
+    if os.getenv("ENV", "dev").lower() not in ("dev", "local", "test") and os.getenv(
+        "VAULT_ENABLED", "false"
+    ).lower() in ("1", "true", "yes"):
         raise
     app_logger = logging.getLogger(__name__)
     app_logger.warning(f"Vault initialization skipped/fallback: {_e}")
 
 from ai_core.api.middleware.access import AccessControlMiddleware
+
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -126,6 +146,7 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         # add correlation id to sentry scope if available
         try:
             import sentry_sdk as _s
+
             with _s.configure_scope() as scope:
                 scope.set_tag("correlation_id", corr_id)
         except Exception:
@@ -134,8 +155,14 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         response.headers["X-Correlation-ID"] = corr_id
         return response
 
-REQUEST_COUNT = Counter('ai_core_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
-REQUEST_LATENCY = Histogram('ai_core_request_latency_seconds', 'Request latency', ['endpoint'])
+
+REQUEST_COUNT = Counter(
+    "ai_core_requests_total", "Total HTTP requests", ["method", "endpoint", "status"]
+)
+REQUEST_LATENCY = Histogram(
+    "ai_core_request_latency_seconds", "Request latency", ["endpoint"]
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -143,7 +170,7 @@ async def lifespan(app: FastAPI):
     app_logger.info("Starting AI Core service...")
     # Startup validations and uptime start
     global _START_TS
-    _START_TS = __import__('time').time()
+    _START_TS = __import__("time").time()
     try:
         _validate_startup()
     except Exception as e:
@@ -159,6 +186,7 @@ async def lifespan(app: FastAPI):
                 from alembic.config import Config as _AlConfig
                 from alembic import command as _alcmd
                 import pathlib as _pl
+
                 base = _pl.Path(__file__).resolve().parents[3]  # backend/
                 cfg = _AlConfig(str(base / "alembic.ini"))
                 _alcmd.upgrade(cfg, "head")
@@ -192,13 +220,16 @@ async def lifespan(app: FastAPI):
     stop_flag = {"stop": False}
 
     def _qdrant_health_loop():
-        app_logger.info("qdrant health loop started", extra={"module_name": "qdrant_health", "pid": os.getpid()})
-        last_ok = time.time()
+        app_logger.info(
+            "qdrant health loop started",
+            extra={"module_name": "qdrant_health", "pid": os.getpid()},
+        )
+        time.time()
         while not stop_flag["stop"]:
             try:
                 ok = qdrant_service.ping()
                 if ok:
-                    last_ok = time.time()
+                    time.time()
                 else:
                     stability_metrics.inc_bg_failure("qdrant_health")
             except Exception as e:
@@ -208,7 +239,10 @@ async def lifespan(app: FastAPI):
             time.sleep(max(0.1, qdrant_recovery.health_interval_ms / 1000.0))
 
     def _retry_worker_loop():
-        app_logger.info("retry worker loop started", extra={"module_name": "retry_worker", "pid": os.getpid()})
+        app_logger.info(
+            "retry worker loop started",
+            extra={"module_name": "retry_worker", "pid": os.getpid()},
+        )
         emb = EmbeddingService()
         while not stop_flag["stop"]:
             # process embedding jobs
@@ -247,6 +281,7 @@ async def lifespan(app: FastAPI):
                     tenant_id_raw = job3.get("tenant_id") or payload.get("tenant_id")
                     # Sanitize UUID fields to avoid DB binding errors
                     import uuid as _uuidmod
+
                     def _clean_uuid(val):
                         try:
                             if val is None:
@@ -254,23 +289,32 @@ async def lifespan(app: FastAPI):
                             return str(_uuidmod.UUID(str(val)))
                         except Exception:
                             return None
-                    tenant_id = _clean_uuid(tenant_id_raw) or "00000000-0000-0000-0000-000000000001"
+
+                    tenant_id = (
+                        _clean_uuid(tenant_id_raw)
+                        or "00000000-0000-0000-0000-000000000001"
+                    )
                     user_id = _clean_uuid(payload.get("user_id"))
                     api_key_id = _clean_uuid(payload.get("api_key_id"))
                     from shared.database.session import SessionLocal as _SL
                     from sqlalchemy import text as _sql
+
                     s = _SL()
                     try:
                         # Discover available columns for backward-compat inserts
                         cols = []
                         try:
                             rows = s.execute(
-                                _sql("SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='audit_log'")
+                                _sql(
+                                    "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='audit_log'"
+                                )
                             ).fetchall()
                             cols = [r[0] for r in rows]
                             if not cols:
                                 rows2 = s.execute(
-                                    _sql("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log'")
+                                    _sql(
+                                        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log'"
+                                    )
                                 ).fetchall()
                                 cols = [r[0] for r in rows2]
                         except Exception:
@@ -301,20 +345,36 @@ async def lifespan(app: FastAPI):
                         if cols:
                             insert_cols = [c for c in field_map.keys() if c in cols]
                         else:
-                            insert_cols = [c for c in field_map.keys() if c != "api_key_id"]
+                            insert_cols = [
+                                c for c in field_map.keys() if c != "api_key_id"
+                            ]
                         # Build parameterized INSERT
                         placeholders = []
                         params = {}
-                        casts = {"id": "::UUID", "tenant_id": "::UUID", "user_id": "::UUID", "api_key_id": "::UUID"}
+                        casts = {
+                            "id": "::UUID",
+                            "tenant_id": "::UUID",
+                            "user_id": "::UUID",
+                            "api_key_id": "::UUID",
+                        }
                         for c in insert_cols:
                             key = f"p_{c}"
                             params[key] = field_map[c]
                             cast = casts.get(c, "")
                             # wrap bind in parentheses so SQLAlchemy recognizes it and Postgres cast applies cleanly
                             placeholders.append(f"(:{key}){cast}")
-                        col_list = ", ".join(insert_cols + ["created_at"]) if ("created_at" not in insert_cols) else ", ".join(insert_cols)
-                        val_list = ", ".join(placeholders + (["now()"] if "created_at" not in insert_cols else []))
-                        sql = _sql(f"INSERT INTO audit_log ({col_list}) VALUES ({val_list})")
+                        col_list = (
+                            ", ".join(insert_cols + ["created_at"])
+                            if ("created_at" not in insert_cols)
+                            else ", ".join(insert_cols)
+                        )
+                        val_list = ", ".join(
+                            placeholders
+                            + (["now()"] if "created_at" not in insert_cols else [])
+                        )
+                        sql = _sql(
+                            f"INSERT INTO audit_log ({col_list}) VALUES ({val_list})"
+                        )
                         s.execute(sql, params)
                         s.commit()
                     finally:
@@ -331,18 +391,24 @@ async def lifespan(app: FastAPI):
                     snap = rolling_cost.snapshot_and_clear()
                     if snap:
                         from shared.database.session import SessionLocal as _SL
+
                         s = _SL()
                         try:
                             from shared.database.models import CostSummary as _CS
                             import uuid as _uuidmod
+
                             def _clean_uuid(val):
                                 try:
                                     return str(_uuidmod.UUID(str(val)))
                                 except Exception:
                                     return None
+
                             for (tenant, model, kind), (tin, tout, usd) in snap.items():
                                 cents = int(round(usd * 100.0))
-                                tenant_uuid = _clean_uuid(tenant) or "00000000-0000-0000-0000-000000000001"
+                                tenant_uuid = (
+                                    _clean_uuid(tenant)
+                                    or "00000000-0000-0000-0000-000000000001"
+                                )
                                 rec = _CS(
                                     tenant_id=tenant_uuid,
                                     model=model,
@@ -360,10 +426,13 @@ async def lifespan(app: FastAPI):
                     log_and_continue(e, "retry_worker.cost_flush", None, None)
 
     def _memory_cleanup_loop():
-        app_logger.info("memory cleanup loop started", extra={"module_name": "memory_cleanup", "pid": os.getpid()})
-        from datetime import datetime, timezone
+        app_logger.info(
+            "memory cleanup loop started",
+            extra={"module_name": "memory_cleanup", "pid": os.getpid()},
+        )
         from sqlalchemy import text as _sql
         from shared.metrics.memory_metrics import memory_metrics
+
         while not stop_flag["stop"]:
             try:
                 # run every 5 minutes
@@ -374,15 +443,30 @@ async def lifespan(app: FastAPI):
                     name = getattr(dialect, "name", "") if dialect else ""
                     if name == "sqlite":
                         # estimate count then delete (no RETURNING)
-                        cnt = s.execute(_sql("SELECT COUNT(1) FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP")).scalar() or 0
-                        s.execute(_sql("DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP"))
+                        cnt = (
+                            s.execute(
+                                _sql(
+                                    "SELECT COUNT(1) FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP"
+                                )
+                            ).scalar()
+                            or 0
+                        )
+                        s.execute(
+                            _sql(
+                                "DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP"
+                            )
+                        )
                         s.commit()
                         try:
                             memory_metrics.add_cleanup_sqlite("global", int(cnt))
                         except Exception:
                             pass
                     else:
-                        rows = s.execute(_sql("DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < now() RETURNING tenant_id")).fetchall()
+                        rows = s.execute(
+                            _sql(
+                                "DELETE FROM conversation_memory WHERE expires_at IS NOT NULL AND expires_at < now() RETURNING tenant_id"
+                            )
+                        ).fetchall()
                         s.commit()
                         # count by tenant
                         tenant_counts = {}
@@ -400,19 +484,24 @@ async def lifespan(app: FastAPI):
     t1 = threading.Thread(target=_qdrant_health_loop, daemon=True)
     t2 = threading.Thread(target=_retry_worker_loop, daemon=True)
     t3 = threading.Thread(target=_memory_cleanup_loop, daemon=True)
+
     # Approval worker
     def _approval_loop():
         try:
             from ai_core.agent.approval_worker import loop as _ap_loop
+
             _ap_loop(stop_flag)
         except Exception as e:
             stability_metrics.inc_bg_failure("approval_worker")
             log_and_continue(e, "agent.approval_worker", None, None)
+
     t4 = threading.Thread(target=_approval_loop, daemon=True)
+
     # Vault token renewal loop
     def _vault_renewal_loop():
         try:
             from shared.security.vault_client import vault_client as _vc
+
             failure_streak = 0
             paused = False
             while not stop_flag["stop"]:
@@ -426,25 +515,35 @@ async def lifespan(app: FastAPI):
                             if _vc.renew_token():
                                 vault_rotation_metrics.inc_renew_ok()
                                 failure_streak = 0
-                                vault_rotation_metrics.set_failure_streak(failure_streak)
+                                vault_rotation_metrics.set_failure_streak(
+                                    failure_streak
+                                )
                                 if paused:
                                     vault_rotation_metrics.inc_resume()
                                     paused = False
                             else:
                                 vault_rotation_metrics.inc_renew_fail()
                                 failure_streak += 1
-                                vault_rotation_metrics.set_failure_streak(failure_streak)
+                                vault_rotation_metrics.set_failure_streak(
+                                    failure_streak
+                                )
                                 # apply backoff with jitter
                                 backoff = min(
                                     vault_rot_cfg.renew_backoff_max_s,
-                                    vault_rot_cfg.renew_backoff_base_s * (2 ** min(6, failure_streak - 1))
+                                    vault_rot_cfg.renew_backoff_base_s
+                                    * (2 ** min(6, failure_streak - 1)),
                                 )
                                 import random as _rand
-                                sleep_s = backoff + _rand.uniform(0, vault_rot_cfg.renew_backoff_base_s)
+
+                                sleep_s = backoff + _rand.uniform(
+                                    0, vault_rot_cfg.renew_backoff_base_s
+                                )
                                 if not paused:
                                     vault_rotation_metrics.inc_pause()
                                     paused = True
-                                app_logger.warning(f"Vault renew backoff: sleeping {int(sleep_s)}s (streak={failure_streak})")
+                                app_logger.warning(
+                                    f"Vault renew backoff: sleeping {int(sleep_s)}s (streak={failure_streak})"
+                                )
                                 # early exit check looped per second to honor stop_flag
                                 for _ in range(int(sleep_s)):
                                     if stop_flag["stop"]:
@@ -464,12 +563,36 @@ async def lifespan(app: FastAPI):
                     time.sleep(1)
         except Exception as e:
             log_and_continue(e, "vault.renewal.init", None, None)
+
     t5 = threading.Thread(target=_vault_renewal_loop, daemon=True)
+    # Retention worker
+    def _retention_loop():
+        try:
+            from ai_core.retention_worker import loop as _rt_loop
+            _rt_loop(stop_flag)
+        except Exception as e:
+            stability_metrics.inc_bg_failure("retention_worker")
+            log_and_continue(e, "retention.worker", None, None)
+    t6 = threading.Thread(target=_retention_loop, daemon=True)
     t1.start()
     t2.start()
     t3.start()
     t4.start()
     t5.start()
+    t6.start()
+
+    # Compliance worker
+    def _compliance_loop():
+        try:
+            from ai_core.compliance_worker import loop as _cp_loop
+
+            _cp_loop(stop_flag)
+        except Exception as e:
+            stability_metrics.inc_bg_failure("compliance_worker")
+            log_and_continue(e, "compliance.worker", None, None)
+
+    t7 = threading.Thread(target=_compliance_loop, daemon=True)
+    t7.start()
 
     # Start connector scheduler if enabled
     scheduler_thread = None
@@ -478,13 +601,16 @@ async def lifespan(app: FastAPI):
             # Discover tenants (for demo, include default only); extend to real tenant list in production
             tenants = ["00000000-0000-0000-0000-000000000001"]
             from ai_core.scheduler.scheduler import ConnectorScheduler
+
             sched = ConnectorScheduler(tenants)
+
             def _sched_loop():
                 try:
                     sched.loop()
                 except Exception as e:
                     stability_metrics.inc_bg_failure("scheduler")
                     log_and_continue(e, "connector.scheduler", None, None)
+
             scheduler_thread = threading.Thread(target=_sched_loop, daemon=True)
             scheduler_thread.start()
         except Exception:
@@ -499,8 +625,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+
 # Startup model validation & uptime
 _START_TS = None
+
+
 def _validate_startup() -> None:
     # JWT secret check is handled in jwt service, but warn here too if weak
     try:
@@ -514,26 +643,36 @@ def _validate_startup() -> None:
     if not model:
         raise RuntimeError("LLM_MODEL environment variable must be set.")
 
+
 # Create FastAPI application
 app = FastAPI(
     title="Omnichannel RAG Chatbot - AI Core",
     description="Enterprise-grade RAG-powered conversational AI service",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Add CORS middleware (restricted by default unless DEV)
 DEV = os.getenv("ENV", "dev").lower() in ("dev", "local", "test")
-allow_origins = ["*"] if DEV else [o for o in (os.getenv("ALLOW_ORIGINS", "").split(",")) if o]
+allow_origins = (
+    ["*"] if DEV else [o for o in (os.getenv("ALLOW_ORIGINS", "").split(",")) if o]
+)
 if not allow_origins:
     allow_origins = ["http://localhost:3000"] if DEV else []
 if not DEV and ("*" in allow_origins):
     app_logger.warning("Wildcard CORS in non-dev environment.")
-app.add_middleware(CORSMiddleware, allow_origins=allow_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Add correlation ID middleware
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(AccessControlMiddleware)
+
 
 # Global exception handler to ensure JSON responses
 @app.exception_handler(Exception)
@@ -542,31 +681,29 @@ async def global_exception_handler(request: Request, exc: Exception):
     try:
         exception_metrics.inc()
         import sentry_sdk as _s
+
         _s.capture_exception(exc)
     except Exception:
         pass
     return JSONResponse(
-        status_code=500,
-        content={"detail": f"Internal server error: {str(exc)}"}
+        status_code=500, content={"detail": f"Internal server error: {str(exc)}"}
     )
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail}
-    )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
 
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
-    return JSONResponse(
-        status_code=400,
-        content={"detail": str(exc)}
-    )
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
 
 @app.get("/v1/health")
 async def health_check():
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc)
     uptime = 0
     try:
@@ -574,13 +711,19 @@ async def health_check():
             uptime = int((now.timestamp() - _START_TS))
     except Exception:
         uptime = 0
-    return {"status": "ok", "time_utc": now.isoformat().replace("+00:00","Z"), "uptime_seconds": uptime}
+    return {
+        "status": "ok",
+        "time_utc": now.isoformat().replace("+00:00", "Z"),
+        "uptime_seconds": uptime,
+    }
+
 
 @app.get("/v1/ready")
 async def ready_check():
     from shared.cache.redis import redis_cache
     from shared.database.session import engine
     from sqlalchemy import text as _sql_text
+
     ok_db = False
     ok_redis = False
     try:
@@ -593,11 +736,17 @@ async def ready_check():
         ok_redis = bool(redis_cache.ping())
     except Exception:
         ok_redis = False
-    return {"status": "ok" if (ok_db and ok_redis) else "degraded", "db": ok_db, "redis": ok_redis}
+    return {
+        "status": "ok" if (ok_db and ok_redis) else "degraded",
+        "db": ok_db,
+        "redis": ok_redis,
+    }
+
 
 @app.get("/metrics")
 async def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
 
 app.include_router(query_router)
 app.include_router(whatsapp_router)
@@ -611,14 +760,12 @@ app.include_router(rerank_admin_router)
 app.include_router(feedback_router)
 app.include_router(approvals_router)
 app.include_router(backup_admin_router)
+app.include_router(restore_admin_router)
+app.include_router(retention_admin_router)
+app.include_router(compliance_admin_router)
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=port,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True, log_level="info")

@@ -1,7 +1,8 @@
 # Multi-stage build for NestJS application
 
 # Stage 1: Build stage
-FROM node:20-alpine AS builder
+ARG NODE_BUILD_IMAGE=node:20-alpine
+FROM ${NODE_BUILD_IMAGE} AS builder
 
 # Set working directory
 WORKDIR /app
@@ -20,7 +21,8 @@ COPY tsconfig*.json ./
 RUN npm run build
 
 # Stage 2: Production stage
-FROM node:20-alpine AS production
+ARG NODE_RUN_IMAGE=node:20-alpine
+FROM ${NODE_RUN_IMAGE} AS production
 
 # Set working directory
 WORKDIR /app

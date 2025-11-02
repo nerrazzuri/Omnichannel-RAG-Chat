@@ -8,7 +8,6 @@ from starlette.responses import Response
 from shared.security.jwt import jwt_service
 from shared.security.api_key import ApiKeyService
 from shared.database.session import SessionLocal
-from ai_core.pipeline.audit_service import write_audit
 
 
 class AccessControlMiddleware(BaseHTTPMiddleware):
@@ -51,5 +50,3 @@ class AccessControlMiddleware(BaseHTTPMiddleware):
                 db.close()
             except Exception:
                 pass
-
-

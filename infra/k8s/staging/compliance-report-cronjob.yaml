@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: compliance-report
+spec:
+  schedule: "0 2 * * *" # daily at 02:00
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          restartPolicy: OnFailure
+          containers:
+            - name: compliance-trigger
+              image: curlimages/curl:8.5.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: ADMIN_UPLOAD_BEARER
+                  valueFrom:
+                    secretKeyRef:
+                      name: admin-secrets
+                      key: ADMIN_UPLOAD_BEARER
+              command: ["/bin/sh", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  curl -sS -X POST "http://ai-core:8000/v1/admin/reports/generate" \
+                    -H "Authorization: Bearer ${ADMIN_UPLOAD_BEARER}" \
+                    -H "Content-Type: application/json" \
+                    -d '{"tenant_id":"00000000-0000-0000-0000-000000000001"}'
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+
+

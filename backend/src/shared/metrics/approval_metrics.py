@@ -3,9 +3,17 @@ from prometheus_client import Counter, Gauge, Histogram
 
 class _ApprovalMetrics:
     def __init__(self) -> None:
-        self._exec_total = Counter("agent_approval_exec_total", "Approval executions", ["status"])  # success|failure
-        self._queue_size = Gauge("agent_approval_queue_size", "Approved but not executed approvals")
-        self._latency = Histogram("agent_approval_exec_latency_ms", "Approval execution latency (ms)", buckets=(50, 100, 200, 500, 1000, 2000, 5000))
+        self._exec_total = Counter(
+            "agent_approval_exec_total", "Approval executions", ["status"]
+        )  # success|failure
+        self._queue_size = Gauge(
+            "agent_approval_queue_size", "Approved but not executed approvals"
+        )
+        self._latency = Histogram(
+            "agent_approval_exec_latency_ms",
+            "Approval execution latency (ms)",
+            buckets=(50, 100, 200, 500, 1000, 2000, 5000),
+        )
 
     def inc_success(self) -> None:
         self._exec_total.labels(status="success").inc()
@@ -21,5 +29,3 @@ class _ApprovalMetrics:
 
 
 approval_metrics = _ApprovalMetrics()
-
-

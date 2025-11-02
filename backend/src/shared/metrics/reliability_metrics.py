@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 import logging
 
 try:
@@ -17,9 +16,17 @@ logger = logging.getLogger(__name__)
 class ReliabilityMetrics:
     def __init__(self) -> None:
         if telemetry.enable_metrics and Counter is not None:
-            self.retries = Counter('ai_core_retries_total', 'Total retry attempts', ['operation'])
-            self.breaker_opens = Counter('ai_core_circuit_opens_total', 'Circuit breaker opened count', ['service'])
-            self.recovery_seconds = Histogram('ai_core_recovery_seconds', 'Recovery duration seconds', ['service'])
+            self.retries = Counter(
+                "ai_core_retries_total", "Total retry attempts", ["operation"]
+            )
+            self.breaker_opens = Counter(
+                "ai_core_circuit_opens_total",
+                "Circuit breaker opened count",
+                ["service"],
+            )
+            self.recovery_seconds = Histogram(
+                "ai_core_recovery_seconds", "Recovery duration seconds", ["service"]
+            )
         else:  # graceful no-op
             self.retries = None
             self.breaker_opens = None
@@ -48,5 +55,3 @@ class ReliabilityMetrics:
 
 
 reliability_metrics = ReliabilityMetrics()
-
-

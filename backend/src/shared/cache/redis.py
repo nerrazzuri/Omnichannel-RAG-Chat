@@ -6,15 +6,14 @@ runtime failures or noisy logs. When disabled, all get/set operations
 become no-ops and return sensible defaults.
 """
 import json
-import pickle
 from typing import Any, Optional, Union
 from redis import Redis
 from redis.cluster import RedisCluster
-from redis.exceptions import ConnectionError
 import logging
 import os
 
 logger = logging.getLogger(__name__)
+
 
 class RedisCache:
     """Redis cache service with tenant isolation."""
@@ -30,7 +29,9 @@ class RedisCache:
         if self._client is None and not self._disabled:
             try:
                 # Try cluster first
-                self._client = RedisCluster.from_url(self.url, socket_connect_timeout=0.5)
+                self._client = RedisCluster.from_url(
+                    self.url, socket_connect_timeout=0.5
+                )
                 logger.info("Connected to Redis Cluster")
             except Exception:
                 try:
@@ -42,22 +43,30 @@ class RedisCache:
                     self._client = None
                     self._disabled = True
                     if not self._warned:
-                        logger.warning(f"Redis unavailable at {self.url}. Caching disabled. ({e})")
+                        logger.warning(
+                            f"Redis unavailable at {self.url}. Caching disabled. ({e})"
+                        )
                         self._warned = True
 
         return self._client  # May be None when disabled
 
-    def set_tenant_key(self, tenant_id: str, key: str, value: Any, ttl: int = 3600) -> bool:
+    def set_tenant_key(
+        self, tenant_id: str, key: str, value: Any, ttl: int = 3600
+    ) -> bool:
         """Set a tenant-specific cache key."""
         if self._disabled or self.get_client() is None:
             return False
         try:
             tenant_key = f"tenant:{tenant_id}:{key}"
-            serialized_value = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+            serialized_value = (
+                json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+            )
             return self.get_client().setex(tenant_key, ttl, serialized_value)
         except Exception as e:
             if not self._warned:
-                logger.warning(f"Failed to set cache key {key} for tenant {tenant_id}: {e}")
+                logger.warning(
+                    f"Failed to set cache key {key} for tenant {tenant_id}: {e}"
+                )
                 self._warned = True
             return False
 
@@ -75,10 +84,12 @@ class RedisCache:
             try:
                 return json.loads(value)
             except json.JSONDecodeError:
-                return value.decode('utf-8') if isinstance(value, bytes) else value
+                return value.decode("utf-8") if isinstance(value, bytes) else value
         except Exception as e:
             if not self._warned:
-                logger.warning(f"Failed to get cache key {key} for tenant {tenant_id}: {e}")
+                logger.warning(
+                    f"Failed to get cache key {key} for tenant {tenant_id}: {e}"
+                )
                 self._warned = True
             return None
 
@@ -91,7 +102,9 @@ class RedisCache:
             return bool(self.get_client().delete(tenant_key))
         except Exception as e:
             if not self._warned:
-                logger.warning(f"Failed to delete cache key {key} for tenant {tenant_id}: {e}")
+                logger.warning(
+                    f"Failed to delete cache key {key} for tenant {tenant_id}: {e}"
+                )
                 self._warned = True
             return False
 
@@ -162,6 +175,7 @@ class RedisCache:
             return bool(self.get_client().ping())
         except Exception:
             return False
+
 
 # Global cache instance
 redis_cache = RedisCache()

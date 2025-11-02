@@ -38,7 +38,9 @@ class RAGPipeline:
         self.response_formatter = ResponseFormatter()
         self.qc = PostGenerationQC()
         self.confidence_checker = ConfidenceChecker()
-        self.semantic_fallback = SemanticFallback(self.retriever, self.fusion, self.cross_reranker, self.schema_bias)
+        self.semantic_fallback = SemanticFallback(
+            self.retriever, self.fusion, self.cross_reranker, self.schema_bias
+        )
         self.cache = PipelineCache()
         self.log = logging.getLogger(__name__)
 
@@ -57,13 +59,18 @@ class RAGPipeline:
         """High-level pipeline flow. This mirrors current rag_service logic, but delegates work."""
         self.log.info(f"pipeline: start tenant={tenant_id}")
         import logging
+
         logger = logging.getLogger(__name__)
         # Structured logging
         try:
             from shared.logging.pipeline_logger import PipelineLogger
+
             plog = PipelineLogger(tenant_id)
         except Exception as e:
-            logger.exception("[rag.plog] init error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
+            logger.exception(
+                "[rag.plog] init error",
+                extra={"tenant_id": tenant_id, "action": "rag.answer"},
+            )
             plog = None
         t_start = time.time()
         if plog:
@@ -76,32 +83,54 @@ class RAGPipeline:
                 # derive a stable session_id from user_id+channel + day bucket
                 import uuid as _uuid
                 from datetime import datetime, timezone
-                day = datetime.now(timezone.utc).strftime('%Y%m%d')
+
+                day = datetime.now(timezone.utc).strftime("%Y%m%d")
                 sseed = f"{tenant_id}:{user_id}:{channel or 'web'}:{day}"
                 session_id = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, sseed))
                 from ai_core.pipeline.memory.memory_service import MemoryService
+
                 mem = MemoryService(db)
                 mem_ctx = mem.get_context(tenant_id, session_id)
                 memory_summary = mem_ctx.get("summary")
                 # represent recent turns as pseudo-context for intent routing
-                conversation_context = [{"role": t.split(":",1)[0], "text": t.split(":",1)[1] if ":" in t else t} for t in mem_ctx.get("recent_turns", [])]
+                conversation_context = [
+                    {
+                        "role": t.split(":", 1)[0],
+                        "text": t.split(":", 1)[1] if ":" in t else t,
+                    }
+                    for t in mem_ctx.get("recent_turns", [])
+                ]
         except Exception as e:
-            logger.exception("[rag.context] fetch error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
+            logger.exception(
+                "[rag.context] fetch error",
+                extra={"tenant_id": tenant_id, "action": "rag.answer"},
+            )
             conversation_context = []
-        decision = self.intent_router.classify(query, conversation_context, tenant_id, user_id or "anon")
+        decision = self.intent_router.classify(
+            query, conversation_context, tenant_id, user_id or "anon"
+        )
         intent = decision.intent
         self.log.info(f"pipeline: intent={intent}")
         if plog:
-            plog.emit({"intent": intent, "router_decision": {
-                "confidence": decision.confidence,
-                "source": decision.source,
-                "contextual_trigger": decision.contextual_trigger,
-            }})
+            plog.emit(
+                {
+                    "intent": intent,
+                    "router_decision": {
+                        "confidence": decision.confidence,
+                        "source": decision.source,
+                        "contextual_trigger": decision.contextual_trigger,
+                    },
+                }
+            )
 
         expanded = self.schema_expander.expand(query, tenant_id)
-        self.log.info(f"pipeline: expanded_terms={len(expanded.get('expanded_terms', []))}")
+        self.log.info(
+            f"pipeline: expanded_terms={len(expanded.get('expanded_terms', []))}"
+        )
         if plog:
-            plog.emit({"schema_expansion": {"count": len(expanded.get("expanded_terms", []))}})
+            plog.emit(
+                {"schema_expansion": {"count": len(expanded.get("expanded_terms", []))}}
+            )
 
         retrieved = self.retriever.retrieve_all(
             query=query,
@@ -120,11 +149,15 @@ class RAGPipeline:
         )
         self.log.info(f"pipeline: candidates after fuse={len(fused)}")
         if plog:
-            plog.emit({"retrieval": {
-                "bm25_hits": len(retrieved.get("bm25_texts", [])),
-                "vector_hits": len(retrieved.get("dense_hits", [])),
-                "field_hits": len(retrieved.get("field_value_hits", []))
-            }})
+            plog.emit(
+                {
+                    "retrieval": {
+                        "bm25_hits": len(retrieved.get("bm25_texts", [])),
+                        "vector_hits": len(retrieved.get("dense_hits", [])),
+                        "field_hits": len(retrieved.get("field_value_hits", [])),
+                    }
+                }
+            )
 
         reranked_docs = self.cross_reranker.rerank(
             query,
@@ -145,6 +178,7 @@ class RAGPipeline:
         try:
             if db:
                 from ai_core.pipeline.audit_service import write_audit
+
                 elapsed_ms = int((time.time() - t_start) * 1000)
                 write_audit(
                     db=db,
@@ -153,7 +187,14 @@ class RAGPipeline:
                     action="retrieval:rerank",
                     resource="knowledge",
                     request_text=query,
-                    response_text="\n".join([d.get("text", "")[:200] if isinstance(d, dict) else str(d)[:200] for d in reranked_docs[:5]]),
+                    response_text="\n".join(
+                        [
+                            d.get("text", "")[:200]
+                            if isinstance(d, dict)
+                            else str(d)[:200]
+                            for d in reranked_docs[:5]
+                        ]
+                    ),
                     success=True,
                     latency_ms=elapsed_ms,
                     model=None,
@@ -165,7 +206,10 @@ class RAGPipeline:
                     correlation_id=correlation_id,
                 )
         except Exception as e:
-            logger.exception("[rag.audit.retrieval] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
+            logger.exception(
+                "[rag.audit.retrieval] error",
+                extra={"tenant_id": tenant_id, "action": "rag.answer"},
+            )
 
         # 2) Structured executor for aggregate intent (prefer before retrieval)
         result_hint = None
@@ -173,6 +217,7 @@ class RAGPipeline:
             try:
                 # Attempt to assemble a DataFrame from the most recent document's rows via retriever metadata
                 import pandas as _pd  # type: ignore
+
                 rows: List[Dict[str, Any]] = []
                 schema_cols: List[str] = []
                 for hit in retrieved.get("dense_hits", []):
@@ -186,15 +231,32 @@ class RAGPipeline:
                         schema_cols = [str(c) for c in cols]
                 if rows:
                     df = _pd.DataFrame(rows)
-                    schema_info = {"columns": [c.lower() for c in (list(df.columns) if not schema_cols else schema_cols)], "types": {}}
+                    schema_info = {
+                        "columns": [
+                            c.lower()
+                            for c in (
+                                list(df.columns) if not schema_cols else schema_cols
+                            )
+                        ],
+                        "types": {},
+                    }
                     context = {"tenant_id": tenant_id, "intent": intent, "query": query}
                     agg = self.structured.execute(query, df, schema_info, context)
                     if agg and isinstance(agg.get("summary"), str):
                         # If we have a structured result, skip retrieval/rerank and answer directly
-                        payload = self.response_formatter.generate(query, [agg.get("summary", "")], intent=intent, result_hint=agg.get("summary"))
-                        self.log.info(f"executor: used structured result -> {agg.get('summary')}")
+                        payload = self.response_formatter.generate(
+                            query,
+                            [agg.get("summary", "")],
+                            intent=intent,
+                            result_hint=agg.get("summary"),
+                        )
+                        self.log.info(
+                            f"executor: used structured result -> {agg.get('summary')}"
+                        )
                         if plog:
-                            plog.emit({"executor": {"used": True, "operation": "aggregate"}})
+                            plog.emit(
+                                {"executor": {"used": True, "operation": "aggregate"}}
+                            )
                         return payload
             except Exception:
                 self.log.warning("structured executor path failed; falling back")
@@ -228,49 +290,84 @@ class RAGPipeline:
                 sid = f"S{i}"
                 meta = text_to_meta.get(t, {}) if isinstance(text_to_meta, dict) else {}
                 title = meta.get("title") or f"Context {i}"
-                structured_snippets.append({
-                    "id": sid,
-                    "source_label": title,
-                    "text": t,
-                    "doc": {
-                        "document_id": meta.get("document_id"),
-                        "title": meta.get("title"),
-                        "source_url": meta.get("source_url"),
-                    },
-                })
+                structured_snippets.append(
+                    {
+                        "id": sid,
+                        "source_label": title,
+                        "text": t,
+                        "doc": {
+                            "document_id": meta.get("document_id"),
+                            "title": meta.get("title"),
+                            "source_url": meta.get("source_url"),
+                        },
+                    }
+                )
         except Exception:
-            structured_snippets = [{"id": f"S{i+1}", "source_label": f"Context {i+1}", "text": t} for i, t in enumerate(ctx_texts[:30])]
-        payload = self.response_formatter.generate(query, structured_snippets, intent=intent, result_hint=result_hint, tenant_id=tenant_id)
+            structured_snippets = [
+                {"id": f"S{i+1}", "source_label": f"Context {i+1}", "text": t}
+                for i, t in enumerate(ctx_texts[:30])
+            ]
+        payload = self.response_formatter.generate(
+            query,
+            structured_snippets,
+            intent=intent,
+            result_hint=result_hint,
+            tenant_id=tenant_id,
+        )
         if plog:
             try:
-                model_name = getattr(getattr(self.response_formatter, "_llm", None), "model", "unknown")
+                model_name = getattr(
+                    getattr(self.response_formatter, "_llm", None), "model", "unknown"
+                )
             except Exception:
                 model_name = "unknown"
             plog.emit({"generation": {"model": model_name, "ctx_used": len(ctx_texts)}})
         try:
-            payload = self.qc.run(self.response_formatter._llm, payload, query, structured_snippets, intent, result_hint)
+            payload = self.qc.run(
+                self.response_formatter._llm,
+                payload,
+                query,
+                structured_snippets,
+                intent,
+                result_hint,
+            )
             if plog:
                 qc = payload.get("qc_status", {})
-                plog.emit({"qc": {"confidence": qc.get("confidence"), "rewrite": qc.get("rewrite_used")}})
+                plog.emit(
+                    {
+                        "qc": {
+                            "confidence": qc.get("confidence"),
+                            "rewrite": qc.get("rewrite_used"),
+                        }
+                    }
+                )
         except Exception as e:
-            logger.exception("[rag.qc] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
+            logger.exception(
+                "[rag.qc] error", extra={"tenant_id": tenant_id, "action": "rag.answer"}
+            )
         # Propagate QC confidence to top-level and record metric
         try:
             qc_conf = float(payload.get("qc_status", {}).get("confidence", 0.0))
             payload["confidence"] = qc_conf
             try:
                 from shared.metrics.quality_metrics import quality_metrics
+
                 quality_metrics.set_response_conf(tenant_id, qc_conf)
             except Exception:
                 pass
         except Exception:
             pass
-        self.log.info(f"pipeline: response_len={len(payload.get('response',''))} ctx_used={len(ctx_texts)}")
+        self.log.info(
+            f"pipeline: response_len={len(payload.get('response',''))} ctx_used={len(ctx_texts)}"
+        )
         # Audit generation
         try:
             if db:
                 from ai_core.pipeline.audit_service import write_audit
-                model_name = getattr(getattr(self.response_formatter, "_llm", None), "model", "unknown")
+
+                model_name = getattr(
+                    getattr(self.response_formatter, "_llm", None), "model", "unknown"
+                )
                 elapsed_ms = int((time.time() - t_start) * 1000)
                 write_audit(
                     db=db,
@@ -291,7 +388,10 @@ class RAGPipeline:
                     correlation_id=correlation_id,
                 )
         except Exception as e:
-            logger.exception("[rag.audit.generation] error", extra={"tenant_id": tenant_id, "action": "rag.answer"})
+            logger.exception(
+                "[rag.audit.generation] error",
+                extra={"tenant_id": tenant_id, "action": "rag.answer"},
+            )
 
         if self.confidence_checker.low(payload):
             fb = self.semantic_fallback.run(query, tenant_id, db)
@@ -322,16 +422,18 @@ class RAGPipeline:
             if db and user_id:
                 import uuid as _uuid
                 from datetime import datetime, timezone
-                day = datetime.now(timezone.utc).strftime('%Y%m%d')
+
+                day = datetime.now(timezone.utc).strftime("%Y%m%d")
                 sseed = f"{tenant_id}:{user_id}:{channel or 'web'}:{day}"
                 session_id = str(_uuid.uuid5(_uuid.NAMESPACE_DNS, sseed))
                 from ai_core.pipeline.memory.memory_service import MemoryService
+
                 mem = MemoryService(db)
                 mem.append_turn(tenant_id, session_id, "user", query)
-                mem.append_turn(tenant_id, session_id, "assistant", str(payload.get("response", "")))
+                mem.append_turn(
+                    tenant_id, session_id, "assistant", str(payload.get("response", ""))
+                )
         except Exception:
             pass
 
         return payload
-
-

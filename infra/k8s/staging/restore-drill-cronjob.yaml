@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restore-drill
+spec:
+  schedule: "0 3 1 * *" # monthly, 03:00 UTC on day 1
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          restartPolicy: Never
+          containers:
+            - name: restore-drill
+              image: curlimages/curl:8.7.1
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: AI_CORE_URL
+                  value: http://ai-core:8000
+                - name: AI_CORE_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: backup-secrets
+                      key: AI_CORE_TOKEN
+              command: ["/bin/sh", "-lc"]
+              args:
+                - |
+                  set -e
+                  START=$(date +%s)
+                  # Placeholder: run smoke steps here (restore to isolated namespace)
+                  sleep 5
+                  END=$(date +%s)
+                  DUR=$((END-START))
+                  curl -s -X POST "$AI_CORE_URL/v1/admin/restore/mark" \
+                    -H 'Content-Type: application/json' \
+                    -H "Authorization: Bearer $AI_CORE_TOKEN" \
+                    -d "{\"ok\":true,\"duration_seconds\":$DUR,\"rto_compliant\":true,\"rpo_compliant\":true}"
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+

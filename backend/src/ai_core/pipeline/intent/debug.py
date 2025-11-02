@@ -12,8 +12,11 @@ def main() -> None:
     args = ap.parse_args()
 
     router = HybridContextualRouter()
-    decision = router.classify(args.query, conversation_context=[], tenant_id=args.tenant, user_id=args.user)
+    decision = router.classify(
+        args.query, conversation_context=[], tenant_id=args.tenant, user_id=args.user
+    )
     import json
+
     print(json.dumps(decision.__dict__, indent=2))
 
 

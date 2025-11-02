@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
+
 def _create_engine_for_url(url: str):
     """Create a SQLAlchemy engine appropriate for the given URL."""
     if url.startswith("sqlite"):
@@ -41,6 +42,7 @@ def _create_engine_for_url(url: str):
         pool_timeout=db_pool.pool_timeout,
     )
 
+
 def _try_connect(test_engine, attempts: int = 10, delay_seconds: float = 1.0) -> bool:
     """Try to connect to the database a few times to allow container warmup."""
     for i in range(1, attempts + 1):
@@ -53,6 +55,7 @@ def _try_connect(test_engine, attempts: int = 10, delay_seconds: float = 1.0) ->
                 break
             time.sleep(delay_seconds)
     return False
+
 
 # Create primary engine; retry; environment-aware fallback
 engine = _create_engine_for_url(DATABASE_URL)
@@ -67,10 +70,13 @@ if not DATABASE_URL.startswith("sqlite"):
             engine = _create_engine_for_url(DATABASE_URL)
             _try_connect(engine, attempts=1)
         else:
-            raise RuntimeError(f"Database unreachable at {DATABASE_URL} in {env} environment. Failing fast.")
+            raise RuntimeError(
+                f"Database unreachable at {DATABASE_URL} in {env} environment. Failing fast."
+            )
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 def _ensure_sqlite_migrations() -> None:
     """Minimal migration shim for SQLite to keep local dev DB in sync.
@@ -80,24 +86,32 @@ def _ensure_sqlite_migrations() -> None:
     if not DATABASE_URL.startswith("sqlite"):
         return
     # Allow disabling dev shim via env flag
-    if os.getenv("ENABLE_SQLITE_DEV_SHIM", "true").lower() not in {"1","true","yes"}:
+    if os.getenv("ENABLE_SQLITE_DEV_SHIM", "true").lower() not in {"1", "true", "yes"}:
         return
     try:
         with engine.connect() as conn:
             # Check conversations table exists
-            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"))
+            result = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='conversations'"
+                )
+            )
             if result.fetchone() is None:
                 return
             # Inspect columns
             cols = conn.execute(text("PRAGMA table_info(conversations)")).fetchall()
             col_names = {row[1] for row in cols}
-            if 'channel_context' not in col_names:
-                conn.execute(text("ALTER TABLE conversations ADD COLUMN channel_context JSON"))
+            if "channel_context" not in col_names:
+                conn.execute(
+                    text("ALTER TABLE conversations ADD COLUMN channel_context JSON")
+                )
     except Exception:
         # Do not block app start on shim failure
         pass
 
+
 _initialized = False
+
 
 def get_db() -> Session:
     """Get database session."""
@@ -127,9 +141,11 @@ def get_db() -> Session:
     finally:
         db.close()
 
+
 def create_tables():
     """Create all tables."""
     Base.metadata.create_all(bind=engine)
+
 
 def drop_tables():
     """Drop all tables."""

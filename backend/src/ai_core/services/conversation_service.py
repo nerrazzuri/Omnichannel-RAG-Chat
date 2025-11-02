@@ -13,13 +13,22 @@ class ConversationService:
         self.db = db
 
     def get_or_create_conversation(
-        self, tenant_id: str, user_id: str, channel: str, context: Optional[Dict[str, Any]] = None, channel_ctx: Optional[Dict[str, Any]] = None
+        self,
+        tenant_id: str,
+        user_id: str,
+        channel: str,
+        context: Optional[Dict[str, Any]] = None,
+        channel_ctx: Optional[Dict[str, Any]] = None,
     ) -> Conversation:
         # Ensure the user exists to satisfy FK constraints (PostgreSQL)
         user = self.db.get(User, user_id)
         if not user:
             # Default new users to END_USER role; infer type from channel
-            inferred_type = "EXTERNAL_CUSTOMER" if channel.lower() in {"web", "whatsapp", "telegram", "teams"} else "EXTERNAL_CUSTOMER"
+            inferred_type = (
+                "EXTERNAL_CUSTOMER"
+                if channel.lower() in {"web", "whatsapp", "telegram", "teams"}
+                else "EXTERNAL_CUSTOMER"
+            )
             user = User(id=user_id, tenant_id=tenant_id, user_type=inferred_type)
             self.db.add(user)
             self.db.commit()
@@ -37,9 +46,15 @@ class ConversationService:
             # If conversation has no messages yet, seed Omni greeting
             try:
                 from sqlalchemy import func
-                count = self.db.execute(
-                    select(func.count()).select_from(Message).where(Message.conversation_id == existing.id)
-                ).scalar() or 0
+
+                count = (
+                    self.db.execute(
+                        select(func.count())
+                        .select_from(Message)
+                        .where(Message.conversation_id == existing.id)
+                    ).scalar()
+                    or 0
+                )
                 if count == 0:
                     greeting = "Hello! I’m Omni. How can I help you today?"
                     self.add_message(existing, sender_type="SYSTEM", content=greeting)
@@ -85,7 +100,9 @@ class ConversationService:
         self.db.refresh(msg)
         return msg
 
-    def get_recent_messages(self, conversation: Conversation, limit: int = 10) -> List[Message]:
+    def get_recent_messages(
+        self, conversation: Conversation, limit: int = 10
+    ) -> List[Message]:
         stmt = (
             select(Message)
             .where(Message.conversation_id == conversation.id)
@@ -94,7 +111,9 @@ class ConversationService:
         )
         return list(self.db.execute(stmt).scalars().all())
 
-    def get_active_conversation(self, tenant_id: str, user_id: str, channel: str = "web") -> Optional[Conversation]:
+    def get_active_conversation(
+        self, tenant_id: str, user_id: str, channel: str = "web"
+    ) -> Optional[Conversation]:
         stmt = (
             select(Conversation)
             .where(Conversation.tenant_id == tenant_id)
@@ -104,7 +123,9 @@ class ConversationService:
         )
         return self.db.execute(stmt).scalars().first()
 
-    def get_recent_messages_by_ids(self, tenant_id: str, user_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_messages_by_ids(
+        self, tenant_id: str, user_id: str, limit: int = 5
+    ) -> List[Dict[str, Any]]:
         # Guard invalid UUIDs to avoid DB binding errors
         try:
             _ = uuid.UUID(str(tenant_id))
@@ -122,5 +143,3 @@ class ConversationService:
             except Exception:
                 out.append({"content": m.content, "meta": {}})
         return out
-
-

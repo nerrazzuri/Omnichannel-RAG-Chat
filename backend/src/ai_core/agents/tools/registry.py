@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Type
+from typing import Dict, Optional
 from .base import Tool
 
 
@@ -19,5 +19,3 @@ class ToolRegistry:
 
 
 tool_registry = ToolRegistry()
-
-

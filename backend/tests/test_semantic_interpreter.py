@@ -35,5 +35,3 @@ def test_descriptive_summary():
     assert "works as" in text or "position" in text.lower()
     assert "department" in text.lower()
     assert all(":" not in s for s in out)
-
-

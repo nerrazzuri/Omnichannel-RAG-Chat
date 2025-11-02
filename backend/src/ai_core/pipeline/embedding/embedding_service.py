@@ -21,7 +21,11 @@ class EmbeddingService:
     def __init__(self) -> None:
         api_key = secret_manager.get("OPENAI_API_KEY")
         self.client = OpenAI(api_key=api_key) if api_key else None
-        self.model = getattr(retrieval, 'embedding_model', os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"))
+        self.model = getattr(
+            retrieval,
+            "embedding_model",
+            os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"),
+        )
 
     def _cache_key(self, text: str) -> str:
         digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
@@ -63,14 +67,18 @@ class EmbeddingService:
             vec = resp.data[0].embedding if resp and resp.data else None
             # Token/cost accounting (OpenAI embeds may not return usage; estimate)
             try:
-                usage = getattr(resp, 'usage', None)
-                ptoks = int(getattr(usage, 'prompt_tokens', 0) or 0)
+                usage = getattr(resp, "usage", None)
+                ptoks = int(getattr(usage, "prompt_tokens", 0) or 0)
             except Exception:
                 # rough estimate
-                ptoks = int(len(query)/4)
+                ptoks = int(len(query) / 4)
             m = self.model
-            in_rate = float(cost_cfg.model_in_usd_per_1k.get(m, cost_cfg.model_in_usd_per_1k.get("default", 0.0001)))
-            usd = (ptoks/1000.0)*in_rate
+            in_rate = float(
+                cost_cfg.model_in_usd_per_1k.get(
+                    m, cost_cfg.model_in_usd_per_1k.get("default", 0.0001)
+                )
+            )
+            usd = (ptoks / 1000.0) * in_rate
             cost_metrics.record_tokens(tenant_id, m, "embed", ptoks, 0, usd)
             rolling_cost.add(tenant_id, m, "embed", ptoks, 0, usd)
             return vec if isinstance(vec, list) else None
@@ -104,11 +112,15 @@ class EmbeddingService:
             try:
                 throttle.release(tenant_id, kind="embed")
             except Exception as e:
-                logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
+                logging.getLogger(__name__).exception(
+                    "[embedding.throttle_release] error", extra={"tenant_id": tenant_id}
+                )
         return None
 
     # Batch embedding with caching for synonym/column vectors
-    def embed_texts_with_cache(self, texts: List[str], tenant_id: str) -> List[List[float]]:
+    def embed_texts_with_cache(
+        self, texts: List[str], tenant_id: str
+    ) -> List[List[float]]:
         if not texts:
             return []
         if not self.client:
@@ -146,22 +158,28 @@ class EmbeddingService:
             pass
         # Perform batch embedding for only the missing indices
         batch_inputs = [texts[i] for i in to_compute]
+
         @retry_with_backoff("openai.embed.batch")
         def _do_batch() -> List[List[float]]:
             resp = self.client.embeddings.create(model=self.model, input=batch_inputs)
             out = []
-            if resp and getattr(resp, 'data', None):
+            if resp and getattr(resp, "data", None):
                 for item in resp.data:
-                    vec = getattr(item, 'embedding', [])
+                    vec = getattr(item, "embedding", [])
                     out.append(vec if isinstance(vec, list) else [])
             return out
+
         try:
             batch_vecs = _do_batch()
             # Record costs (approximate)
             try:
                 ptoks = int(sum(len((t or "")) for t in batch_inputs) / 4)
                 m = self.model
-                in_rate = float(cost_cfg.model_in_usd_per_1k.get(m, cost_cfg.model_in_usd_per_1k.get("default", 0.0001)))
+                in_rate = float(
+                    cost_cfg.model_in_usd_per_1k.get(
+                        m, cost_cfg.model_in_usd_per_1k.get("default", 0.0001)
+                    )
+                )
                 usd = (ptoks / 1000.0) * in_rate
                 cost_metrics.record_tokens(tenant_id, m, "embed", ptoks, 0, usd)
                 rolling_cost.add(tenant_id, m, "embed", ptoks, 0, usd)
@@ -191,7 +209,9 @@ class EmbeddingService:
             try:
                 throttle.release(tenant_id, kind="embed")
             except Exception as e:  # noqa: F841
-                logging.getLogger(__name__).exception("[embedding.throttle_release] error", extra={"tenant_id": tenant_id})
+                logging.getLogger(__name__).exception(
+                    "[embedding.throttle_release] error", extra={"tenant_id": tenant_id}
+                )
         # Normalize output length
         finalized: List[List[float]] = []
         for v in results:
@@ -201,5 +221,3 @@ class EmbeddingService:
     # Backwards-compatible alias expected by some callers
     def _embed_with_cache(self, texts: List[str], tenant_id: str) -> List[List[float]]:
         return self.embed_texts_with_cache(texts, tenant_id)
-
-

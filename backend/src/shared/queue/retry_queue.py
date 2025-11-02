@@ -20,7 +20,13 @@ class RetryQueue:
     def _key(self, job_type: str) -> str:
         return f"{self.ns}:{job_type}"
 
-    def enqueue(self, job_type: str, tenant_id: str, payload: Dict[str, Any], last_error: Optional[str] = None) -> None:
+    def enqueue(
+        self,
+        job_type: str,
+        tenant_id: str,
+        payload: Dict[str, Any],
+        last_error: Optional[str] = None,
+    ) -> None:
         cli = redis_cache.get_client()
         if not cli:
             return
@@ -48,5 +54,3 @@ class RetryQueue:
 
 
 retry_queue = RetryQueue()
-
-

@@ -1,0 +1,11 @@
+groups:
+  - name: retention-enforcer
+    rules:
+      - alert: RetentionLagExceeded
+        expr: ai_core_retention_lag_seconds > 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Retention enforcer lag exceeds 24h"
+

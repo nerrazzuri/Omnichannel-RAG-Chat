@@ -21,7 +21,11 @@ class RerankWeightsIn(BaseModel):
 
 
 @router.post("/set-weights")
-def set_weights(body: RerankWeightsIn, db: Session = Depends(get_db), claims: Dict[str, Any] = Depends(require("admin:rerank"))):
+def set_weights(
+    body: RerankWeightsIn,
+    db: Session = Depends(get_db),
+    claims: Dict[str, Any] = Depends(require("admin:rerank")),
+):
     if str(claims.get("role")) != "ADMIN":
         raise HTTPException(status_code=403, detail="Forbidden")
     rec = TenantRerankConfig(
@@ -33,11 +37,14 @@ def set_weights(body: RerankWeightsIn, db: Session = Depends(get_db), claims: Di
     )
     # deactivate previous
     try:
-        db.query(TenantRerankConfig).filter(TenantRerankConfig.tenant_id == body.tenant_id, TenantRerankConfig.active == True).update({TenantRerankConfig.active: False})  # noqa: E712
+        db.query(TenantRerankConfig).filter(
+            TenantRerankConfig.tenant_id == body.tenant_id,
+            TenantRerankConfig.active == True,
+        ).update(
+            {TenantRerankConfig.active: False}
+        )  # noqa: E712
     except Exception:
         pass
     db.add(rec)
     db.commit()
     return {"ok": True}
-
-

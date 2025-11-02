@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import time
-import random
 import hashlib
-from typing import Dict, Any
+from typing import Dict
 from sqlalchemy.orm import Session
 import logging
 from sqlalchemy import and_
@@ -23,7 +22,13 @@ def _h(text: str) -> str:
 def process_once(db: Session, batch_size: int) -> int:
     rows = (
         db.query(Approval)
-        .filter(and_(Approval.status == "approved", Approval.executed == False, Approval.deleted_at == None))  # noqa: E712
+        .filter(
+            and_(
+                Approval.status == "approved",
+                Approval.executed == False,
+                Approval.deleted_at == None,
+            )
+        )  # noqa: E712
         .order_by(Approval.created_at.asc())
         .limit(max(1, int(batch_size)))
         .all()
@@ -40,11 +45,21 @@ def process_once(db: Session, batch_size: int) -> int:
             # naive json parse fallback
             try:
                 import json as _json
-                payload = _json.loads(payload_str) if payload_str and payload_str.strip().startswith("{") else {}
+
+                payload = (
+                    _json.loads(payload_str)
+                    if payload_str and payload_str.strip().startswith("{")
+                    else {}
+                )
             except Exception as e:
-                logging.getLogger(__name__).exception("[approval_worker.payload_parse] invalid JSON", extra={"approval_id": str(rec.id)})
+                logging.getLogger(__name__).exception(
+                    "[approval_worker.payload_parse] invalid JSON",
+                    extra={"approval_id": str(rec.id)},
+                )
                 payload = {}
-            res = tool.execute(tenant_id=str(rec.tenant_id), api_key_id=None, payload=payload)
+            res = tool.execute(
+                tenant_id=str(rec.tenant_id), api_key_id=None, payload=payload
+            )
             out_sum = {k: v for k, v in res.items() if k != "status"}
             out_sum_str = str(out_sum)[:1000]
             rec.executed = True
@@ -54,8 +69,19 @@ def process_once(db: Session, batch_size: int) -> int:
             db.add(rec)
             db.commit()
             approval_metrics.inc_success()
-            write_audit(db, str(rec.tenant_id), None, "agent.approval.execute", rec.tool_id, redact(payload_str), redact(out_sum_str), True, int((time.time()-t0)*1000), category="agent")
-            approval_metrics.observe_latency_ms(int((time.time()-t0)*1000))
+            write_audit(
+                db,
+                str(rec.tenant_id),
+                None,
+                "agent.approval.execute",
+                rec.tool_id,
+                redact(payload_str),
+                redact(out_sum_str),
+                True,
+                int((time.time() - t0) * 1000),
+                category="agent",
+            )
+            approval_metrics.observe_latency_ms(int((time.time() - t0) * 1000))
             processed += 1
         except Exception as e:
             try:
@@ -63,8 +89,11 @@ def process_once(db: Session, batch_size: int) -> int:
             except Exception:
                 pass
             approval_metrics.inc_failure()
-            approval_metrics.observe_latency_ms(int((time.time()-t0)*1000))
-            logging.getLogger(__name__).exception("[approval_worker.process] execution error", extra={"approval_id": str(rec.id), "tool": rec.tool_id})
+            approval_metrics.observe_latency_ms(int((time.time() - t0) * 1000))
+            logging.getLogger(__name__).exception(
+                "[approval_worker.process] execution error",
+                extra={"approval_id": str(rec.id), "tool": rec.tool_id},
+            )
             # simple retry jitter handled by outer loop cadence
             continue
     return processed
@@ -81,5 +110,3 @@ def loop(stop_flag: Dict[str, bool]) -> None:
             except Exception:
                 pass
         time.sleep(max(1, int(agent_approval.poll_interval_s)))
-
-

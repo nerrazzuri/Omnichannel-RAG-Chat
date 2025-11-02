@@ -1,0 +1,58 @@
+name: Compliance Check
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 4 * * *'
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    env:
+      API_BASE: ${{ secrets.COMPLIANCE_API_BASE }}
+      ADMIN_UPLOAD_BEARER: ${{ secrets.ADMIN_UPLOAD_BEARER }}
+      TENANT_ID: ${{ secrets.COMPLIANCE_TENANT_ID }}
+      MIN_COMPLIANCE: ${{ secrets.MIN_COMPLIANCE_SCORE }}
+    steps:
+      - name: Check inputs
+        run: |
+          : "${API_BASE:?API base required}"
+          : "${ADMIN_UPLOAD_BEARER:?Bearer required}"
+          : "${TENANT_ID:?Tenant required}"
+          echo "Using API_BASE=${API_BASE}"
+
+      - name: Fetch latest compliance summary
+        run: |
+          set -euo pipefail
+          curl -sS -H "Authorization: Bearer ${ADMIN_UPLOAD_BEARER}" \
+            "${API_BASE}/v1/admin/reports/latest?tenant_id=${TENANT_ID}" > latest.json
+          cat latest.json
+
+      - name: Evaluate compliance gate
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y >/dev/null 2>&1
+          sudo apt-get install -y jq >/dev/null 2>&1
+          overall=$(jq -r '.summary.overall // .scores.overall // empty' latest.json)
+          if [ -z "$overall" ]; then
+            echo "No overall score present in report"
+            exit 1
+          fi
+          min="${MIN_COMPLIANCE:-0.90}"
+          # bc may not be available; use python for float compare
+          python3 - <<PY
+import sys
+overall=float("${overall}")
+minv=float("${min}")
+print(f"overall={overall}, min={minv}")
+sys.exit(0 if overall >= minv else 2)
+PY
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance_summary
+          path: latest.json
+
+

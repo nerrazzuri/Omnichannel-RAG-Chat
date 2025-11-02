@@ -12,5 +12,3 @@ class ConfidenceChecker:
             return float(conf) < float(threshold)
         except Exception:
             return True
-
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 from shared.database.session import SessionLocal
 from shared.database.models import Approval
 from sqlalchemy.orm import Session
@@ -48,7 +48,9 @@ def _require_manage(request: Request):
 
 
 @router.post("/request")
-def create_request(req: ApprovalRequest, db: Session = Depends(get_db), request: Request = None):
+def create_request(
+    req: ApprovalRequest, db: Session = Depends(get_db), request: Request = None
+):
     rec = Approval(
         tenant_id=req.tenant_id,
         tool_id=req.tool_id,
@@ -63,7 +65,9 @@ def create_request(req: ApprovalRequest, db: Session = Depends(get_db), request:
 
 
 @router.post("/decide")
-def decide(dec: ApprovalDecision, db: Session = Depends(get_db), request: Request = None):
+def decide(
+    dec: ApprovalDecision, db: Session = Depends(get_db), request: Request = None
+):
     if request:
         _require_manage(request)
     rec = db.get(Approval, dec.approval_id)
@@ -73,6 +77,7 @@ def decide(dec: ApprovalDecision, db: Session = Depends(get_db), request: Reques
     rec.reason = dec.reason
     rec.decided_by = dec.decided_by
     from sqlalchemy.sql import func as _func
+
     rec.decided_at = _func.now()
     db.add(rec)
     db.commit()
@@ -81,14 +86,32 @@ def decide(dec: ApprovalDecision, db: Session = Depends(get_db), request: Reques
     # Audit decision
     try:
         from ai_core.pipeline.audit_service import write_audit
-        write_audit(db, str(rec.tenant_id), None, "agent.approval.decision", rec.tool_id, rec.action_payload_hash, rec.status, True, 0, category="agent")
+
+        write_audit(
+            db,
+            str(rec.tenant_id),
+            None,
+            "agent.approval.decision",
+            rec.tool_id,
+            rec.action_payload_hash,
+            rec.status,
+            True,
+            0,
+            category="agent",
+        )
     except Exception:
         pass
     return {"status": rec.status}
 
 
 @router.get("/list")
-def list_approvals(tenant_id: str = Query(...), status: Optional[str] = Query(None), limit: int = Query(50), db: Session = Depends(get_db), request: Request = None):
+def list_approvals(
+    tenant_id: str = Query(...),
+    status: Optional[str] = Query(None),
+    limit: int = Query(50),
+    db: Session = Depends(get_db),
+    request: Request = None,
+):
     if request:
         _require_manage(request)
     q = db.query(Approval).filter(Approval.tenant_id == tenant_id)
@@ -96,6 +119,7 @@ def list_approvals(tenant_id: str = Query(...), status: Optional[str] = Query(No
         q = q.filter(Approval.status == status)
     q = q.order_by(Approval.created_at.desc()).limit(min(200, max(1, limit)))
     rows = q.all()
+
     def _row(r: Approval):
         return {
             "id": str(r.id),
@@ -108,11 +132,14 @@ def list_approvals(tenant_id: str = Query(...), status: Optional[str] = Query(No
             "executed_at": str(r.executed_at) if r.executed_at else None,
             "summary": (r.output_summary or "")[:300],
         }
+
     return [_row(r) for r in rows]
 
 
 @router.get("/{approval_id}")
-def get_approval(approval_id: str, db: Session = Depends(get_db), request: Request = None):
+def get_approval(
+    approval_id: str, db: Session = Depends(get_db), request: Request = None
+):
     if request:
         _require_manage(request)
     rec = db.get(Approval, approval_id)
@@ -133,13 +160,16 @@ def get_approval(approval_id: str, db: Session = Depends(get_db), request: Reque
 
 
 @router.delete("/{approval_id}")
-def delete_approval(approval_id: str, db: Session = Depends(get_db), request: Request = None):
+def delete_approval(
+    approval_id: str, db: Session = Depends(get_db), request: Request = None
+):
     if request:
         _require_manage(request)
     rec = db.get(Approval, approval_id)
     if not rec:
         raise HTTPException(status_code=404, detail="not found")
     from sqlalchemy.sql import func as _func
+
     rec.deleted_at = _func.now()
     db.add(rec)
     db.commit()
@@ -147,7 +177,11 @@ def delete_approval(approval_id: str, db: Session = Depends(get_db), request: Re
 
 
 @router.get("/stats")
-def approvals_stats(tenant_id: str | None = Query(None), db: Session = Depends(get_db), request: Request = None):
+def approvals_stats(
+    tenant_id: str | None = Query(None),
+    db: Session = Depends(get_db),
+    request: Request = None,
+):
     if request:
         _require_manage(request)
     q = db.query(Approval.status, _func.count(Approval.id))
@@ -157,7 +191,13 @@ def approvals_stats(tenant_id: str | None = Query(None), db: Session = Depends(g
     rows = q.all()
     by_status = {str(status): int(cnt) for status, cnt in rows}
     # pending execution queue size
-    queue_count = db.query(_func.count(Approval.id)).filter(Approval.status == 'approved', Approval.executed == False, Approval.deleted_at == None).scalar()  # noqa: E712
+    queue_count = (
+        db.query(_func.count(Approval.id))
+        .filter(
+            Approval.status == "approved",
+            Approval.executed == False,
+            Approval.deleted_at == None,
+        )
+        .scalar()
+    )  # noqa: E712
     return {"by_status": by_status, "queue_size": int(queue_count or 0)}
-
-

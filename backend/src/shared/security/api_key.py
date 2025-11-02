@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,9 @@ class ApiKeyService:
         if not presented_key:
             return None
         key_hash = _sha256(presented_key)
-        rec: Optional[ApiKey] = db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
+        rec: Optional[ApiKey] = (
+            db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
+        )
         if not rec or rec.revoked_at is not None:
             return None
         if rec.expires_at and rec.expires_at < datetime.utcnow():
@@ -37,7 +39,11 @@ class ApiKeyService:
                 db.rollback()
             except Exception:
                 pass
-        role = "ADMIN" if any(s.startswith("admin:") for s in (rec.scopes or [])) else "SERVICE"
+        role = (
+            "ADMIN"
+            if any(s.startswith("admin:") for s in (rec.scopes or []))
+            else "SERVICE"
+        )
         return {
             "user_id": f"api:{rec.id}",
             "api_key_id": str(rec.id),
@@ -50,5 +56,3 @@ class ApiKeyService:
     @staticmethod
     def hash_key(cleartext_key: str) -> str:
         return _sha256(cleartext_key)
-
-

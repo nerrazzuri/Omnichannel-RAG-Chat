@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from shared.database.models import Document, KnowledgeChunk, KnowledgeBase, Tenant
 from shared.utils.storage import write_metadata
 from openai import OpenAI
-import os, hashlib, struct, random
+import os
+import hashlib
+import random
 import io
 import csv
 from docx import Document as DocxDocument
@@ -15,6 +17,7 @@ from openpyxl import load_workbook
 from shared.vector.qdrant import qdrant_service
 from shared.config.tuning import chunking
 from shared.crypto.crypto_service import crypto_service
+
 try:
     import tiktoken  # type: ignore
 except Exception:
@@ -40,6 +43,7 @@ def chunk_text(text: str, chunk_size: int = 700, overlap: int = 100) -> List[str
 class DocumentService:
     def __init__(self, db: Session):
         self.db = db
+
     # ------------------------------
     # Normalized connector ingestion
     # ------------------------------
@@ -48,34 +52,78 @@ class DocumentService:
 
         Records are dict-like objects with fields per NormalizedRecord.
         """
-        from shared.database.models import KnowledgeBase, Document, KnowledgeChunk, KnowledgeBase as _KB
+        from shared.database.models import (
+            KnowledgeBase,
+            Document,
+            KnowledgeChunk,
+        )
         import uuid as _uuid
+
         count = 0
         for rec in records:
             try:
-                tenant_id = rec.tenant_id if hasattr(rec, 'tenant_id') else rec.get('tenant_id')
-                source_system = rec.source_system if hasattr(rec, 'source_system') else rec.get('source_system')
-                external_id = rec.external_id if hasattr(rec, 'external_id') else rec.get('external_id')
-                title = rec.title if hasattr(rec, 'title') else rec.get('title')
-                content = rec.content if hasattr(rec, 'content') else rec.get('content')
+                tenant_id = (
+                    rec.tenant_id if hasattr(rec, "tenant_id") else rec.get("tenant_id")
+                )
+                source_system = (
+                    rec.source_system
+                    if hasattr(rec, "source_system")
+                    else rec.get("source_system")
+                )
+                external_id = (
+                    rec.external_id
+                    if hasattr(rec, "external_id")
+                    else rec.get("external_id")
+                )
+                title = rec.title if hasattr(rec, "title") else rec.get("title")
+                content = rec.content if hasattr(rec, "content") else rec.get("content")
                 meta = {
                     "source_system": source_system,
                     "external_id": external_id,
-                    "owner": getattr(rec, 'owner', None) if hasattr(rec, 'owner') else rec.get('owner'),
-                    "classification": getattr(rec, 'classification', None) if hasattr(rec, 'classification') else rec.get('classification'),
+                    "owner": getattr(rec, "owner", None)
+                    if hasattr(rec, "owner")
+                    else rec.get("owner"),
+                    "classification": getattr(rec, "classification", None)
+                    if hasattr(rec, "classification")
+                    else rec.get("classification"),
                 }
                 # Find or create a default KB for connector ingestion
-                kb = self.db.query(KnowledgeBase).filter(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.name == "connector").first()
+                kb = (
+                    self.db.query(KnowledgeBase)
+                    .filter(
+                        KnowledgeBase.tenant_id == tenant_id,
+                        KnowledgeBase.name == "connector",
+                    )
+                    .first()
+                )
                 if not kb:
                     kb = KnowledgeBase(tenant_id=tenant_id, name="connector")
-                    self.db.add(kb); self.db.commit(); self.db.refresh(kb)
+                    self.db.add(kb)
+                    self.db.commit()
+                    self.db.refresh(kb)
                 # Dedup: existing document with same external id and source
-                existing = self.db.query(Document).filter(Document.knowledge_base_id == kb.id, Document.meta['external_id'].astext == external_id, Document.meta['source_system'].astext == source_system).first()
+                existing = (
+                    self.db.query(Document)
+                    .filter(
+                        Document.knowledge_base_id == kb.id,
+                        Document.meta["external_id"].astext == external_id,
+                        Document.meta["source_system"].astext == source_system,
+                    )
+                    .first()
+                )
                 if existing:
                     doc = existing
                 else:
-                    doc = Document(knowledge_base_id=kb.id, title=title, content=content[:160], meta=meta, status="PROCESSING")
-                    self.db.add(doc); self.db.commit(); self.db.refresh(doc)
+                    doc = Document(
+                        knowledge_base_id=kb.id,
+                        title=title,
+                        content=content[:160],
+                        meta=meta,
+                        status="PROCESSING",
+                    )
+                    self.db.add(doc)
+                    self.db.commit()
+                    self.db.refresh(doc)
                 # Create one chunk per record (can be extended to chunking later)
                 kc = KnowledgeChunk(
                     id=_uuid.uuid4(),
@@ -83,9 +131,10 @@ class DocumentService:
                     content=content[:1600],
                     chunk_index=0,
                     embedding=None,
-                    meta={"source": source_system}
+                    meta={"source": source_system},
                 )
-                self.db.add(kc); self.db.commit()
+                self.db.add(kc)
+                self.db.commit()
                 count += 1
             except Exception:
                 self.db.rollback()
@@ -93,6 +142,7 @@ class DocumentService:
         return count
         try:
             from shared.security.secret_manager import secret_manager
+
             api_key = secret_manager.get("OPENAI_API_KEY")
         except Exception:
             api_key = os.getenv("OPENAI_API_KEY")
@@ -115,7 +165,12 @@ class DocumentService:
             sentences.append(s)
         return sentences
 
-    def _build_chunks_with_metadata(self, text: str, target_chars: int = chunking.target_chars, overlap_sentences: int = chunking.sentence_overlap) -> List[Tuple[str, Dict[str, Any]]]:
+    def _build_chunks_with_metadata(
+        self,
+        text: str,
+        target_chars: int = chunking.target_chars,
+        overlap_sentences: int = chunking.sentence_overlap,
+    ) -> List[Tuple[str, Dict[str, Any]]]:
         """Sentence-aware chunking with small overlap and chapter/page tagging.
 
         Recognizes page markers like [[PAGE:n]] if present.
@@ -130,7 +185,7 @@ class DocumentService:
             current_page = 1
             segments: List[Tuple[int, str]] = []
             for m in page_matches:
-                seg = text[last_idx:m.start()]
+                seg = text[last_idx : m.start()]
                 if seg.strip():
                     segments.append((current_page, seg))
                 try:
@@ -152,7 +207,11 @@ class DocumentService:
         for page_num, page_text in pages:
             # Identify chapter heading at start of page or within first lines
             for line in page_text.splitlines()[:6]:
-                m = re.match(r"^\s*chapter\s+(\d+)\s*[\.:\-]?\s*(.*)$", line.strip(), flags=re.IGNORECASE)
+                m = re.match(
+                    r"^\s*chapter\s+(\d+)\s*[\.:\-]?\s*(.*)$",
+                    line.strip(),
+                    flags=re.IGNORECASE,
+                )
                 if m:
                     try:
                         current_chapter_num = int(m.group(1))
@@ -165,9 +224,11 @@ class DocumentService:
             if not sentences:
                 continue
 
-            if chunking.mode == 'tokens' and tiktoken is not None:
+            if chunking.mode == "tokens" and tiktoken is not None:
                 # Token-based windowing over sentences
-                enc = tiktoken.get_encoding(os.getenv('TIKTOKEN_ENCODING', 'cl100k_base'))
+                enc = tiktoken.get_encoding(
+                    os.getenv("TIKTOKEN_ENCODING", "cl100k_base")
+                )
                 # Precompute tokenized sentences
                 sent_tokens = [enc.encode(s) for s in sentences]
                 buf_tokens: List[int] = []
@@ -233,7 +294,7 @@ class DocumentService:
                                 meta["chapter_title"] = current_chapter_title
                             chunks.append((text_chunk, meta))
                             # Start new buffer with overlap
-                            overlap = sentences[max(0, i - overlap_sentences):i]
+                            overlap = sentences[max(0, i - overlap_sentences) : i]
                             buf = overlap + [s]
 
                 if buf:
@@ -280,14 +341,20 @@ class DocumentService:
             )
             msg = [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": f"TITLE: {title}\nSAMPLE:\n{sample_text[:4000]}"},
+                {
+                    "role": "user",
+                    "content": f"TITLE: {title}\nSAMPLE:\n{sample_text[:4000]}",
+                },
             ]
             resp = self.openai_client.chat.completions.create(
-                model=os.getenv("RAG_PLANNER_MODEL", os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini")),
+                model=os.getenv(
+                    "RAG_PLANNER_MODEL", os.getenv("RAG_CHAT_MODEL", "gpt-4o-mini")
+                ),
                 temperature=0,
                 messages=msg,
             )
             import json as _json
+
             raw = (resp.choices[0].message.content or "").strip()
             plan = _json.loads(raw)
             if not isinstance(plan, dict):
@@ -308,9 +375,12 @@ class DocumentService:
         """
         try:
             import re
+
             lines = [l.strip() for l in text.splitlines() if l.strip()]
             for line in lines[:5]:  # inspect only early lines of the chunk
-                m = re.match(r"^chapter\s+(\d+)\s*[\.:\-]?\s*(.*)$", line, flags=re.IGNORECASE)
+                m = re.match(
+                    r"^chapter\s+(\d+)\s*[\.:\-]?\s*(.*)$", line, flags=re.IGNORECASE
+                )
                 if m:
                     num = int(m.group(1))
                     title = (m.group(2) or "").strip()
@@ -356,7 +426,9 @@ class DocumentService:
                     # Rough heuristic: 4 chars per token
                     return max(1, len(text) // 4)
 
-                MAX_TOKENS_PER_REQUEST = 100_000  # conservative to avoid 400s on large batches
+                MAX_TOKENS_PER_REQUEST = (
+                    100_000  # conservative to avoid 400s on large batches
+                )
                 embeddings: List[List[float]] = []
                 batch: List[str] = []
                 tokens_in_batch = 0
@@ -364,7 +436,9 @@ class DocumentService:
                     t_tokens = estimate_tokens(t)
                     if batch and tokens_in_batch + t_tokens > MAX_TOKENS_PER_REQUEST:
                         resp = self.client.embeddings.create(
-                            model=os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"),
+                            model=os.getenv(
+                                "RAG_EMBED_MODEL", "text-embedding-3-large"
+                            ),
                             input=batch,
                         )
                         embeddings.extend([d.embedding for d in resp.data])
@@ -401,21 +475,32 @@ class DocumentService:
             vectors.append(vec)
         return vectors
 
-    def process_and_store(self, tenant_id: str, title: str, content: str, knowledge_base_id: str, progress_job_id: str | None = None) -> Tuple[str, int]:
+    def process_and_store(
+        self,
+        tenant_id: str,
+        title: str,
+        content: str,
+        knowledge_base_id: str,
+        progress_job_id: str | None = None,
+    ) -> Tuple[str, int]:
         try:
             # Validate tenant_id is a valid UUID
             import uuid
+
             try:
                 uuid.UUID(tenant_id)
             except ValueError:
-                raise ValueError(f"Invalid tenant_id: {tenant_id}. Must be a valid UUID.")
-            
+                raise ValueError(
+                    f"Invalid tenant_id: {tenant_id}. Must be a valid UUID."
+                )
+
             # Ensure a knowledge base exists for this tenant
             kb_id = self._get_or_create_knowledge_base(tenant_id, knowledge_base_id)
 
             # PII redaction
             try:
                 from ai_core.services.redactor import Redactor
+
                 content = Redactor().sanitize(content)
             except Exception:
                 pass
@@ -423,13 +508,24 @@ class DocumentService:
             raw_content = content
             try:
                 from shared.crypto.crypto_service import crypto_service
+
                 enc = crypto_service.encrypt(tenant_id, raw_content.encode("utf-8"))
-                doc = Document(title=title, content="", knowledge_base_id=kb_id, status="PROCESSING")
-                setattr(doc, 'raw_encrypted', enc)
-                setattr(doc, 'enc_ver', 1)
+                doc = Document(
+                    title=title,
+                    content="",
+                    knowledge_base_id=kb_id,
+                    status="PROCESSING",
+                )
+                setattr(doc, "raw_encrypted", enc)
+                setattr(doc, "enc_ver", 1)
             except Exception:
                 # Fallback to plaintext content if crypto not configured
-                doc = Document(title=title, content=content, knowledge_base_id=kb_id, status="PROCESSING")
+                doc = Document(
+                    title=title,
+                    content=content,
+                    knowledge_base_id=kb_id,
+                    status="PROCESSING",
+                )
             self.db.add(doc)
             self.db.commit()
             self.db.refresh(doc)
@@ -438,33 +534,44 @@ class DocumentService:
             plan = self.plan_ingest(title, content[:8000])
             chunk_pairs = self._build_chunks_with_metadata(raw_content)
             chunks = [t for (t, _m) in chunk_pairs]
-            metas = [m for (_t, m) in chunk_pairs]
+            [m for (_t, m) in chunk_pairs]
             if not chunks:
                 raise ValueError("No chunks could be created from the content")
-            
+
             # Progress: chunking done
             if progress_job_id:
                 try:
                     from shared.cache.redis import redis_cache
-                    redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "embedding", "progress": 40}, ttl=3600)
+
+                    redis_cache.set_tenant_key(
+                        tenant_id,
+                        f"upload:job:{progress_job_id}",
+                        {"phase": "embedding", "progress": 40},
+                        ttl=3600,
+                    )
                 except Exception:
                     pass
             # Use planner directive for embedding path
             use_local_embeddings = bool(plan.get("use_local_embeddings"))
             # Decrypt if needed (already sanitized)
             try:
-                if hasattr(doc, 'raw_encrypted') and getattr(doc, 'raw_encrypted'):
-                    dec = crypto_service.decrypt(tenant_id, getattr(doc, 'raw_encrypted'))
-                    raw_content = dec.decode('utf-8', errors='ignore')
+                if hasattr(doc, "raw_encrypted") and getattr(doc, "raw_encrypted"):
+                    dec = crypto_service.decrypt(
+                        tenant_id, getattr(doc, "raw_encrypted")
+                    )
+                    raw_content = dec.decode("utf-8", errors="ignore")
             except Exception:
                 pass
             embeddings = self.embed(chunks, force_local=use_local_embeddings)
 
             # Store chunks
             qdrant_payload: List[Dict[str, Any]] = []
-            for idx, ((chunk_text_val, meta_chunk), emb) in enumerate(zip(chunk_pairs, embeddings)):
+            for idx, ((chunk_text_val, meta_chunk), emb) in enumerate(
+                zip(chunk_pairs, embeddings)
+            ):
                 # Ensure a concrete UUID is assigned before using the ID
                 import uuid as _uuid
+
                 chunk_id = _uuid.uuid4()
                 # Merge auto-headline detection with chunk-derived meta
                 chapter_meta = self._extract_chapter_info(chunk_text_val)
@@ -484,24 +591,32 @@ class DocumentService:
                 if progress_job_id and idx % 10 == 0:
                     try:
                         from shared.cache.redis import redis_cache
+
                         pct = 40 + int(50 * (idx + 1) / max(1, len(chunks)))
-                        redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "storing", "progress": min(90, pct)}, ttl=3600)
+                        redis_cache.set_tenant_key(
+                            tenant_id,
+                            f"upload:job:{progress_job_id}",
+                            {"phase": "storing", "progress": min(90, pct)},
+                            ttl=3600,
+                        )
                     except Exception:
                         pass
                 # SQLAlchemy default UUID is assigned on instantiation; id is available before commit
                 try:
-                    qdrant_payload.append({
-                        "id": str(chunk_id),
-                        "embedding": emb,
-                        "document_id": str(doc.id),
-                        "document_title": doc.title,
-                        "content": chunk_text_val,
-                        "chunk_index": idx,
-                        "chapter_num": merged_meta.get("chapter_num"),
-                        "chapter_title": merged_meta.get("chapter_title"),
-                        "page": merged_meta.get("page"),
-                        "metadata": merged_meta or {},
-                    })
+                    qdrant_payload.append(
+                        {
+                            "id": str(chunk_id),
+                            "embedding": emb,
+                            "document_id": str(doc.id),
+                            "document_title": doc.title,
+                            "content": chunk_text_val,
+                            "chunk_index": idx,
+                            "chapter_num": merged_meta.get("chapter_num"),
+                            "chapter_title": merged_meta.get("chapter_title"),
+                            "page": merged_meta.get("page"),
+                            "metadata": merged_meta or {},
+                        }
+                    )
                 except Exception:
                     pass
             doc.status = "INDEXED"
@@ -511,8 +626,14 @@ class DocumentService:
 
             # Best-effort: upsert vectors to Qdrant when dimensions match (OpenAI = 1536)
             try:
-                if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
-                    dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
+                if qdrant_payload and isinstance(
+                    qdrant_payload[0].get("embedding"), list
+                ):
+                    dim = (
+                        len(qdrant_payload[0]["embedding"])
+                        if qdrant_payload[0].get("embedding")
+                        else 0
+                    )
                     if dim in (1536, 3072, 1024):
                         try:
                             qdrant_service.create_collection()
@@ -520,12 +641,17 @@ class DocumentService:
                             # Collection may already exist or service may be unavailable
                             pass
                         try:
-                            qdrant_service.upsert_knowledge_chunks(tenant_id, qdrant_payload)
+                            qdrant_service.upsert_knowledge_chunks(
+                                tenant_id, qdrant_payload
+                            )
                         except Exception as e:
-                            logging.getLogger(__name__).warning(f"Qdrant upsert skipped: {e}")
+                            logging.getLogger(__name__).warning(
+                                f"Qdrant upsert skipped: {e}"
+                            )
                             # enqueue for async retry (best-effort)
                             try:
                                 from shared.queue.retry_queue import retry_queue
+
                                 retry_queue.enqueue(
                                     job_type="qdrant_upsert",
                                     tenant_id=tenant_id,
@@ -535,11 +661,13 @@ class DocumentService:
                             except Exception:
                                 pass
                     else:
-                        logging.getLogger(__name__).info("Skipping Qdrant upsert due to embedding dimension mismatch")
+                        logging.getLogger(__name__).info(
+                            "Skipping Qdrant upsert due to embedding dimension mismatch"
+                        )
             except Exception:
                 # Never fail ingestion due to vector store issues
                 pass
-            
+
             # Write metadata.json for downstream processing
             metadata: Dict[str, Any] = {
                 "tenant_id": tenant_id,
@@ -549,19 +677,28 @@ class DocumentService:
                 "chunk_count": doc.chunk_count,
                 "status": doc.status,
             }
-            base_path = os.getenv("DOCUMENT_STORAGE_PATH", os.path.join(os.getcwd(), "storage"))
+            base_path = os.getenv(
+                "DOCUMENT_STORAGE_PATH", os.path.join(os.getcwd(), "storage")
+            )
             try:
                 write_metadata(base_path, tenant_id, str(doc.id), metadata)
             except Exception as e:
                 # Log but don't fail if metadata write fails
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to write metadata: {e}")
-            
+
             if progress_job_id:
                 try:
                     from shared.cache.redis import redis_cache
-                    redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "done", "progress": 100}, ttl=3600)
+
+                    redis_cache.set_tenant_key(
+                        tenant_id,
+                        f"upload:job:{progress_job_id}",
+                        {"phase": "done", "progress": 100},
+                        ttl=3600,
+                    )
                 except Exception:
                     pass
             return str(doc.id), len(chunks)
@@ -582,36 +719,46 @@ class DocumentService:
         name = filename.lower()
         dfs: Dict[str, pd.DataFrame] = {}
         try:
-            if name.endswith('.csv'):
+            if name.endswith(".csv"):
                 # Try common encodings and header depths
                 text_variants = []
-                for enc in ['utf-8-sig', 'utf-8', 'latin-1']:
+                for enc in ["utf-8-sig", "utf-8", "latin-1"]:
                     try:
                         text_variants.append(data.decode(enc))
                         break
                     except Exception:
                         continue
-                raw = text_variants[0] if text_variants else data.decode('utf-8', errors='ignore')
-                for header_depth in [None, [0], [0,1], [0,1,2]]:
+                raw = (
+                    text_variants[0]
+                    if text_variants
+                    else data.decode("utf-8", errors="ignore")
+                )
+                for header_depth in [None, [0], [0, 1], [0, 1, 2]]:
                     try:
-                        df = pd.read_csv(pd.io.common.StringIO(raw), header=header_depth) if header_depth is not None else pd.read_csv(pd.io.common.StringIO(raw))
+                        df = (
+                            pd.read_csv(pd.io.common.StringIO(raw), header=header_depth)
+                            if header_depth is not None
+                            else pd.read_csv(pd.io.common.StringIO(raw))
+                        )
                         if df is not None and df.shape[0] > 0:
-                            dfs['Sheet1'] = df
+                            dfs["Sheet1"] = df
                             break
                     except Exception:
                         continue
                 if not dfs:
                     # final fallback
-                    dfs['Sheet1'] = pd.read_csv(pd.io.common.StringIO(raw), header=0)
-            elif name.endswith('.xlsx'):
+                    dfs["Sheet1"] = pd.read_csv(pd.io.common.StringIO(raw), header=0)
+            elif name.endswith(".xlsx"):
                 buf = io.BytesIO(data)
                 # Try multiple header depths per sheet
-                xls = pd.ExcelFile(buf, engine='openpyxl')
+                xls = pd.ExcelFile(buf, engine="openpyxl")
                 for sheet in xls.sheet_names:
                     df: pd.DataFrame | None = None
-                    for header_depth in [[0,1,2], [0,1], [0]]:
+                    for header_depth in [[0, 1, 2], [0, 1], [0]]:
                         try:
-                            df_try = pd.read_excel(xls, sheet_name=sheet, header=header_depth)
+                            df_try = pd.read_excel(
+                                xls, sheet_name=sheet, header=header_depth
+                            )
                             if df_try is not None and df_try.shape[0] > 0:
                                 df = df_try
                                 break
@@ -621,12 +768,18 @@ class DocumentService:
                         df = pd.read_excel(xls, sheet_name=sheet)
                     dfs[sheet] = df
             else:
-                raise ValueError("Unsupported tabular file type; expected .csv or .xlsx")
+                raise ValueError(
+                    "Unsupported tabular file type; expected .csv or .xlsx"
+                )
             # Log basic info
-            logging.getLogger(__name__).info(f"Loaded file '{filename}' into {len(dfs)} DataFrame(s): {list(dfs.keys())}")
+            logging.getLogger(__name__).info(
+                f"Loaded file '{filename}' into {len(dfs)} DataFrame(s): {list(dfs.keys())}"
+            )
             return dfs
         except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to load '{filename}' into pandas: {e}")
+            logging.getLogger(__name__).error(
+                f"Failed to load '{filename}' into pandas: {e}"
+            )
             raise
 
     @staticmethod
@@ -636,7 +789,7 @@ class DocumentService:
             if isinstance(df.columns, pd.MultiIndex):
                 df = df.copy()
                 df.columns = [
-                    ' | '.join([str(c) for c in col if str(c) != 'nan']).strip()
+                    " | ".join([str(c) for c in col if str(c) != "nan"]).strip()
                     for col in df.columns.values
                 ]
             else:
@@ -651,7 +804,7 @@ class DocumentService:
     @staticmethod
     def _is_mostly_numeric_or_nan(series: pd.Series) -> bool:
         try:
-            s = pd.to_numeric(series, errors='coerce')
+            s = pd.to_numeric(series, errors="coerce")
             frac_num_or_nan = float(s.notna().sum()) / max(1, len(s))
             # Consider numeric if original non-nulls mostly converted to numeric
             return frac_num_or_nan >= 0.9
@@ -661,7 +814,9 @@ class DocumentService:
     @staticmethod
     def _should_summarize(df: pd.DataFrame) -> bool:
         try:
-            non_obj_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+            non_obj_cols = [
+                c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])
+            ]
             frac_numeric = float(len(non_obj_cols)) / max(1, len(df.columns))
             return (frac_numeric >= 0.7) and (len(df.columns) < 10)
         except Exception:
@@ -675,11 +830,18 @@ class DocumentService:
             for col, stats in desc.items():
                 if not isinstance(stats, dict):
                     continue
-                mn = stats.get('min'); mx = stats.get('max'); mean = stats.get('mean')
-                lines.append(f"- {col}: min={mn}, max={mx}, mean={round(mean, 3) if mean is not None else mean}")
+                mn = stats.get("min")
+                mx = stats.get("max")
+                mean = stats.get("mean")
+                lines.append(
+                    f"- {col}: min={mn}, max={mx}, mean={round(mean, 3) if mean is not None else mean}"
+                )
             # Simple outlier detection: z-score > 3 (approx.)
             try:
-                z = (df[ [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])] ] - df.mean(numeric_only=True)) / df.std(numeric_only=True)
+                z = (
+                    df[[c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]]
+                    - df.mean(numeric_only=True)
+                ) / df.std(numeric_only=True)
                 outlier_counts = (np.abs(z) > 3).sum().to_dict()
                 for col, cnt in outlier_counts.items():
                     if int(cnt) > 0:
@@ -691,7 +853,9 @@ class DocumentService:
             return f"Summary for {title}: numeric overview unavailable."
 
     @classmethod
-    def df_to_semantic_docs(cls, df: pd.DataFrame, filename: str, sheet_name: str | None = None) -> List[Tuple[str, Dict[str, Any]]]:
+    def df_to_semantic_docs(
+        cls, df: pd.DataFrame, filename: str, sheet_name: str | None = None
+    ) -> List[Tuple[str, Dict[str, Any]]]:
         """Convert a DataFrame into row-wise semantic mini-documents.
         If the DataFrame is predominantly numeric with few columns, return a single summary doc.
         Returns list of (text, metadata) where metadata includes source_file and row_index.
@@ -727,7 +891,7 @@ class DocumentService:
                 parts.append(f"{c}: {val}")
                 # Always include in structured metadata map (even if numeric) for precise retrieval later
                 try:
-                    row_map[str(c)] = ("" if pd.isna(val) else str(val))
+                    row_map[str(c)] = "" if pd.isna(val) else str(val)
                 except Exception:
                     row_map[str(c)] = str(val)
             text = "\n".join(parts)
@@ -738,7 +902,15 @@ class DocumentService:
                 docs.append((text, meta))
         return docs
 
-    def process_pandas_and_store(self, tenant_id: str, title: str, filename: str, data: bytes, knowledge_base_id: str, progress_job_id: str | None = None) -> Tuple[str, int]:
+    def process_pandas_and_store(
+        self,
+        tenant_id: str,
+        title: str,
+        filename: str,
+        data: bytes,
+        knowledge_base_id: str,
+        progress_job_id: str | None = None,
+    ) -> Tuple[str, int]:
         """End-to-end: load file to DataFrame(s), convert to semantic docs, embed and store one chunk per doc.
         Returns (document_id_of_first, total_chunks).
         """
@@ -758,17 +930,24 @@ class DocumentService:
                 continue
             # Create parent Document row with a preview
             preview = "\n\n".join([d[0] for d in docs[:2]])
-            parent = Document(title=f"{title} - {sheet}", content=preview, knowledge_base_id=kb_id, status="PROCESSING")
+            parent = Document(
+                title=f"{title} - {sheet}",
+                content=preview,
+                knowledge_base_id=kb_id,
+                status="PROCESSING",
+            )
             # Optionally store flattened columns on meta
             try:
                 parent.meta = {"columns": list(df.columns)}
             except Exception:
                 pass
             self.db.add(parent)
-            self.db.commit(); self.db.refresh(parent)
+            self.db.commit()
+            self.db.refresh(parent)
             # Persist schema fields in cache for query expansion
             try:
                 from shared.cache.redis import redis_cache
+
                 cols_norm = [str(c).strip() for c in df.columns]
                 existing = redis_cache.get_tenant_key(tenant_id, "schema:fields")
                 merged = []
@@ -776,20 +955,29 @@ class DocumentService:
                     merged = list(dict.fromkeys([*existing, *cols_norm]))
                 else:
                     merged = cols_norm
-                redis_cache.set_tenant_key(tenant_id, "schema:fields", merged, ttl=24*3600)
+                redis_cache.set_tenant_key(
+                    tenant_id, "schema:fields", merged, ttl=24 * 3600
+                )
             except Exception:
                 pass
             # Progress update
             if progress_job_id:
                 try:
                     from shared.cache.redis import redis_cache
-                    redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "embedding", "progress": 40}, ttl=3600)
+
+                    redis_cache.set_tenant_key(
+                        tenant_id,
+                        f"upload:job:{progress_job_id}",
+                        {"phase": "embedding", "progress": 40},
+                        ttl=3600,
+                    )
                 except Exception:
                     pass
             # Embed docs (use local for robustness by default for tabular)
             # PII redaction for tabular docs
             try:
                 from ai_core.services.redactor import Redactor
+
                 red = Redactor()
                 texts = [red.sanitize(t) for (t, _m) in docs]
             except Exception:
@@ -802,47 +990,78 @@ class DocumentService:
             qdrant_payload: List[Dict[str, Any]] = []
             for idx, (t, m, emb) in enumerate(zip(texts, metas, embeddings)):
                 import uuid as _uuid
+
                 chunk_id = _uuid.uuid4()
                 # Encrypt chunk content; store preview only in plaintext
                 try:
-                    enc = crypto_service.encrypt(tenant_id, t.encode('utf-8'))
-                    kc = KnowledgeChunk(id=chunk_id, document_id=parent.id, content=t[:160], content_encrypted=enc, enc_ver=1, chunk_index=idx, embedding=emb, meta=m)
+                    enc = crypto_service.encrypt(tenant_id, t.encode("utf-8"))
+                    kc = KnowledgeChunk(
+                        id=chunk_id,
+                        document_id=parent.id,
+                        content=t[:160],
+                        content_encrypted=enc,
+                        enc_ver=1,
+                        chunk_index=idx,
+                        embedding=emb,
+                        meta=m,
+                    )
                 except Exception:
-                    kc = KnowledgeChunk(id=chunk_id, document_id=parent.id, content=t, chunk_index=idx, embedding=emb, meta=m)
+                    kc = KnowledgeChunk(
+                        id=chunk_id,
+                        document_id=parent.id,
+                        content=t,
+                        chunk_index=idx,
+                        embedding=emb,
+                        meta=m,
+                    )
                 self.db.add(kc)
                 total_chunks += 1
                 # Prepare optional vector payload
                 try:
-                    qdrant_payload.append({
-                        "id": str(chunk_id),
-                        "embedding": emb,
-                        "document_id": str(parent.id),
-                        "document_title": parent.title,
-                        "content": t[:160],
-                        "chunk_index": idx,
-                        "chapter_num": None,
-                        "chapter_title": None,
-                        "page": None,
-                    })
+                    qdrant_payload.append(
+                        {
+                            "id": str(chunk_id),
+                            "embedding": emb,
+                            "document_id": str(parent.id),
+                            "document_title": parent.title,
+                            "content": t[:160],
+                            "chunk_index": idx,
+                            "chapter_num": None,
+                            "chapter_title": None,
+                            "page": None,
+                        }
+                    )
                 except Exception:
                     pass
-            parent.status = "INDEXED"; parent.chunk_count = len(texts)
-            self.db.add(parent); self.db.commit()
+            parent.status = "INDEXED"
+            parent.chunk_count = len(texts)
+            self.db.add(parent)
+            self.db.commit()
             if first_doc_id is None:
                 first_doc_id = str(parent.id)
             # Log sample preview
-            logger.info(f"Parsed rows for '{sheet}': {len(texts)}; sample=\n{texts[0][:400]}" )
+            logger.info(
+                f"Parsed rows for '{sheet}': {len(texts)}; sample=\n{texts[0][:400]}"
+            )
             # Best-effort upsert to Qdrant if dims match
             try:
-                if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
-                    dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
+                if qdrant_payload and isinstance(
+                    qdrant_payload[0].get("embedding"), list
+                ):
+                    dim = (
+                        len(qdrant_payload[0]["embedding"])
+                        if qdrant_payload[0].get("embedding")
+                        else 0
+                    )
                     if dim in (1536, 3072, 1024):
                         try:
                             qdrant_service.create_collection()
                         except Exception:
                             pass
                         try:
-                            qdrant_service.upsert_knowledge_chunks(tenant_id, qdrant_payload)
+                            qdrant_service.upsert_knowledge_chunks(
+                                tenant_id, qdrant_payload
+                            )
                         except Exception as e:
                             logger.warning(f"Qdrant upsert skipped: {e}")
             except Exception:
@@ -852,8 +1071,10 @@ class DocumentService:
             try:
                 fv_texts: List[str] = []
                 fv_meta: List[Dict[str, Any]] = []
+
                 def _norm(s: str) -> str:
-                    return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower()).strip('_')
+                    return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower()).strip("_")
+
                 for ridx, row in df.iterrows():
                     record_sig = f"{title or ''}|{sheet or ''}|{ridx}"
                     for col in list(df.columns):
@@ -864,18 +1085,18 @@ class DocumentService:
                                 raw_val = row[col]
                             except Exception:
                                 raw_val = None
-                        if pd.isna(raw_val) or str(raw_val).strip() == '':
+                        if pd.isna(raw_val) or str(raw_val).strip() == "":
                             continue
                         field_display = str(col).strip()
                         field_name = _norm(field_display)
                         # Robust value normalization for non-text fields
                         try:
                             if isinstance(raw_val, (int, float)):
-                                value_raw = (f"{raw_val}")
+                                value_raw = f"{raw_val}"
                             else:
                                 value_raw = str(raw_val)
                         except Exception:
-                            value_raw = str(raw_val) if raw_val is not None else ''
+                            value_raw = str(raw_val) if raw_val is not None else ""
                         value_raw = value_raw.strip()
                         # Add simple hierarchical context (sheet and filename)
                         context_bits = []
@@ -884,9 +1105,13 @@ class DocumentService:
                         if title:
                             context_bits.append(f"File: {title}")
                         ctx_str = " | ".join(context_bits)
-                        text = f"Field: {field_display} | Value: {value_raw} | Record: {int(ridx)+1}" + (f" | {ctx_str}" if ctx_str else "")
+                        text = (
+                            f"Field: {field_display} | Value: {value_raw} | Record: {int(ridx)+1}"
+                            + (f" | {ctx_str}" if ctx_str else "")
+                        )
                         try:
                             from ai_core.services.redactor import Redactor
+
                             text = Redactor().sanitize(text)
                         except Exception:
                             pass
@@ -895,28 +1120,42 @@ class DocumentService:
                         importance = 0.8
                         if re.search(r"\b(id|uuid|ssn|number|no)\b", field_name):
                             importance = 0.3
-                        elif re.search(r"\b(date|dob|salary|amount|manager|department|title|position)\b", field_name):
+                        elif re.search(
+                            r"\b(date|dob|salary|amount|manager|department|title|position)\b",
+                            field_name,
+                        ):
                             importance = 1.2
-                        fv_meta.append({
-                            "row_index": int(ridx),
-                            "field_name": field_name,
-                            "field_display": field_display,
-                            "value_raw": value_raw,
-                            "value_norm": _norm(value_raw),
-                            "sheet": sheet,
-                            "source_file": title,
-                            "record_sig": record_sig,
-                            "document_id": str(parent.id),
-                            "content": text,
-                            "importance": float(importance),
-                        })
+                        fv_meta.append(
+                            {
+                                "row_index": int(ridx),
+                                "field_name": field_name,
+                                "field_display": field_display,
+                                "value_raw": value_raw,
+                                "value_norm": _norm(value_raw),
+                                "sheet": sheet,
+                                "source_file": title,
+                                "record_sig": record_sig,
+                                "document_id": str(parent.id),
+                                "content": text,
+                                "importance": float(importance),
+                            }
+                        )
                 if fv_texts:
                     emb = self.embed(fv_texts, force_local=False)
                     ready: List[Dict[str, Any]] = []
-                    if emb and all(isinstance(v, list) and len(v) in (1536, 3072, 1024) for v in emb):
+                    if emb and all(
+                        isinstance(v, list) and len(v) in (1536, 3072, 1024)
+                        for v in emb
+                    ):
                         import uuid as _uuid
+
                         for m, vec in zip(fv_meta, emb):
-                            fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:fv:{m['document_id']}:{m['row_index']}:{m['field_name']}"))
+                            fid = str(
+                                _uuid.uuid5(
+                                    _uuid.NAMESPACE_URL,
+                                    f"{tenant_id}:fv:{m['document_id']}:{m['row_index']}:{m['field_name']}",
+                                )
+                            )
                             item = {
                                 "id": fid,
                                 "embedding": vec,
@@ -948,11 +1187,15 @@ class DocumentService:
                     desc = f"Field: {cname}. Meaning: {cname.replace('_', ' ')}."
                     # naive alias/token generation for bootstrap
                     tokens = [t for t in re.split(r"[^a-z0-9]+", cname.lower()) if t]
-                    aliases = list(dict.fromkeys([
-                        cname,
-                        cname.replace('_', ' '),
-                        ' '.join(tokens),
-                    ]))
+                    aliases = list(
+                        dict.fromkeys(
+                            [
+                                cname,
+                                cname.replace("_", " "),
+                                " ".join(tokens),
+                            ]
+                        )
+                    )
                     col_texts.append(desc)
                     col_names.append(cname)
                     col_aliases.append(aliases)
@@ -965,33 +1208,46 @@ class DocumentService:
                     for i, (cname, emb) in enumerate(zip(col_names, schema_embs)):
                         if isinstance(emb, list) and len(emb) in (1536, 3072, 1024):
                             import uuid as _uuid
+
                             # Deterministic ID per tenant+field
-                            fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"))
-                            ready.append({
-                                "id": fid,
-                                "embedding": emb,
-                                "field_name": cname,
-                                "description": f"{cname}",
-                                "aliases": col_aliases[i],
-                                "tokens": col_tokens[i],
-                            })
+                            fid = str(
+                                _uuid.uuid5(
+                                    _uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"
+                                )
+                            )
+                            ready.append(
+                                {
+                                    "id": fid,
+                                    "embedding": emb,
+                                    "field_name": cname,
+                                    "description": f"{cname}",
+                                    "aliases": col_aliases[i],
+                                    "tokens": col_tokens[i],
+                                }
+                            )
                     if ready:
                         # Cleanup: delete stale schema fields no longer present
                         try:
-                            existing = qdrant_service.list_schema_fields(tenant_id, limit=2000)
+                            existing = qdrant_service.list_schema_fields(
+                                tenant_id, limit=2000
+                            )
                             existing_names = set()
                             id_by_name = {}
                             for p in existing:
-                                pl = p.get('payload') or {}
-                                nm = pl.get('field_name')
+                                pl = p.get("payload") or {}
+                                nm = pl.get("field_name")
                                 if isinstance(nm, str):
                                     existing_names.add(nm)
-                                    id_by_name[nm] = p.get('id')
+                                    id_by_name[nm] = p.get("id")
                             current_names = set(col_names)
                             stale_names = list(existing_names - current_names)
-                            stale_ids = [id_by_name[n] for n in stale_names if n in id_by_name]
+                            stale_ids = [
+                                id_by_name[n] for n in stale_names if n in id_by_name
+                            ]
                             if stale_ids:
-                                qdrant_service.delete_schema_fields_by_ids(tenant_id, stale_ids)
+                                qdrant_service.delete_schema_fields_by_ids(
+                                    tenant_id, stale_ids
+                                )
                         except Exception:
                             pass
                         try:
@@ -1007,32 +1263,40 @@ class DocumentService:
         if progress_job_id:
             try:
                 from shared.cache.redis import redis_cache
-                redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "done", "progress": 100}, ttl=3600)
+
+                redis_cache.set_tenant_key(
+                    tenant_id,
+                    f"upload:job:{progress_job_id}",
+                    {"phase": "done", "progress": 100},
+                    ttl=3600,
+                )
             except Exception:
                 pass
         return first_doc_id, total_chunks
 
     def _get_or_create_knowledge_base(self, tenant_id: str, provided_kb_id: str) -> str:
         import uuid
-        
+
         # Validate tenant_id
         try:
             tenant_uuid = uuid.UUID(tenant_id)
         except ValueError:
             raise ValueError(f"Invalid tenant_id format: {tenant_id}")
-        
+
         # Ensure tenant exists; if missing, create a default record (dev-friendly)
         try:
             existing_tenant = self.db.get(Tenant, tenant_uuid)
             if not existing_tenant:
                 # Create a minimal tenant to satisfy FK; name/domain deterministic for the given UUID
-                t = Tenant(id=tenant_uuid, name="Seeded Tenant", domain="seeded", settings={})
+                t = Tenant(
+                    id=tenant_uuid, name="Seeded Tenant", domain="seeded", settings={}
+                )
                 self.db.add(t)
                 self.db.commit()
         except Exception:
             # Best-effort; if this fails, the subsequent KB creation will surface the error
             self.db.rollback()
-        
+
         # If a valid kb id is provided and exists, use it
         if provided_kb_id and provided_kb_id != "00000000-0000-0000-0000-000000000000":
             try:
@@ -1055,7 +1319,9 @@ class DocumentService:
             return str(kb.id)
 
         # Create a new knowledge base for this tenant
-        new_kb = KnowledgeBase(tenant_id=tenant_uuid, name="Default", status="ACTIVE", document_count=0)
+        new_kb = KnowledgeBase(
+            tenant_id=tenant_uuid, name="Default", status="ACTIVE", document_count=0
+        )
         self.db.add(new_kb)
         self.db.commit()
         self.db.refresh(new_kb)
@@ -1063,95 +1329,99 @@ class DocumentService:
 
     def extract_text_from_file(self, filename: str, data: bytes) -> str:
         name = filename.lower()
-        if name.endswith('.txt') or name.endswith('.csv'):
+        if name.endswith(".txt") or name.endswith(".csv"):
             try:
-                return data.decode('utf-8')
+                return data.decode("utf-8")
             except Exception:
-                return data.decode('latin-1', errors='ignore')
-        if name.endswith('.docx'):
+                return data.decode("latin-1", errors="ignore")
+        if name.endswith(".docx"):
             buf = io.BytesIO(data)
             d = DocxDocument(buf)
-            return '\n'.join(p.text for p in d.paragraphs)
-        if name.endswith('.pptx'):
+            return "\n".join(p.text for p in d.paragraphs)
+        if name.endswith(".pptx"):
             buf = io.BytesIO(data)
             prs = Presentation(buf)
             texts: List[str] = []
             for slide in prs.slides:
                 for shape in slide.shapes:
-                    if hasattr(shape, 'text'):
+                    if hasattr(shape, "text"):
                         texts.append(shape.text)
-            return '\n'.join(texts)
-        if name.endswith('.xlsx'):
+            return "\n".join(texts)
+        if name.endswith(".xlsx"):
             buf = io.BytesIO(data)
             wb = load_workbook(buf, data_only=True)
             texts: List[str] = []
             for ws in wb.worksheets:
                 for row in ws.iter_rows(values_only=True):
-                    texts.append('\t'.join('' if v is None else str(v) for v in row))
-            return '\n'.join(texts)
+                    texts.append("\t".join("" if v is None else str(v) for v in row))
+            return "\n".join(texts)
         # PDF handled by PyPDF2 with OCR fallback
-        if name.endswith('.pdf'):
+        if name.endswith(".pdf"):
             try:
                 from PyPDF2 import PdfReader
+
                 buf = io.BytesIO(data)
                 reader = PdfReader(buf)
                 texts: List[str] = []
                 for i, page in enumerate(reader.pages, start=1):
-                    extracted = page.extract_text() or ''
+                    extracted = page.extract_text() or ""
                     if not extracted.strip():
                         # OCR fallback via pdfplumber + pytesseract
                         try:
                             import pdfplumber
                             import pytesseract
                             from PIL import Image
+
                             with pdfplumber.open(io.BytesIO(data)) as pdf:
-                                if 0 <= (i-1) < len(pdf.pages):
-                                    p = pdf.pages[i-1]
+                                if 0 <= (i - 1) < len(pdf.pages):
+                                    p = pdf.pages[i - 1]
                                     im = p.to_image(resolution=200).original
                                     # Ensure PIL Image
                                     if not isinstance(im, Image.Image):
                                         im = Image.fromarray(im)
                                     ocr_text = pytesseract.image_to_string(im)
-                                    extracted = ocr_text or ''
+                                    extracted = ocr_text or ""
                         except Exception:
                             pass
                     texts.append(f"[[PAGE:{i}]]\n" + extracted)
-                return '\n'.join(texts)
+                return "\n".join(texts)
             except Exception:
                 pass
         # Fallback raw decode and OCR for common image formats
         try:
-            return data.decode('utf-8')
+            return data.decode("utf-8")
         except Exception:
             # Try image OCR if this appears to be an image
             try:
                 import imghdr
+
                 kind = imghdr.what(None, h=data)
-                if kind in ('png', 'jpeg', 'jpg', 'bmp', 'tiff'):
+                if kind in ("png", "jpeg", "jpg", "bmp", "tiff"):
                     from PIL import Image
                     import pytesseract
+
                     img = Image.open(io.BytesIO(data))
                     return pytesseract.image_to_string(img)
             except Exception:
                 pass
-            return data.decode('latin-1', errors='ignore')
+            return data.decode("latin-1", errors="ignore")
 
     def extract_rows_from_file(self, filename: str, data: bytes) -> List[str]:
         name = filename.lower()
         rows: List[str] = []
-        if name.endswith('.csv'):
+        if name.endswith(".csv"):
             try:
-                text = data.decode('utf-8-sig', errors='ignore')
+                text = data.decode("utf-8-sig", errors="ignore")
             except Exception:
-                text = data.decode('latin-1', errors='ignore')
+                text = data.decode("latin-1", errors="ignore")
             reader = csv.reader(io.StringIO(text))
             # Re-serialize each row via csv.writer to preserve quoting and commas inside fields
             for r in reader:
                 buf = io.StringIO()
                 writer = csv.writer(buf)
                 writer.writerow(r)
-                rows.append(buf.getvalue().strip('\n'))
-        elif name.endswith('.xlsx'):
+                rows.append(buf.getvalue().strip("\n"))
+        elif name.endswith(".xlsx"):
             buf = io.BytesIO(data)
             wb = load_workbook(buf, data_only=True)
             for ws in wb.worksheets:
@@ -1159,14 +1429,14 @@ class DocumentService:
                     # Use csv.writer to serialize each row consistently
                     buf_row = io.StringIO()
                     writer = csv.writer(buf_row)
-                    writer.writerow(['' if v is None else v for v in r])
-                    rows.append(buf_row.getvalue().strip('\n'))
+                    writer.writerow(["" if v is None else v for v in r])
+                    rows.append(buf_row.getvalue().strip("\n"))
         return rows
 
     def extract_rows_by_sheet(self, filename: str, data: bytes) -> Dict[str, List[str]]:
         name = filename.lower()
         result: Dict[str, List[str]] = {}
-        if name.endswith('.xlsx'):
+        if name.endswith(".xlsx"):
             buf = io.BytesIO(data)
             wb = load_workbook(buf, data_only=True)
             for ws in wb.worksheets:
@@ -1174,27 +1444,43 @@ class DocumentService:
                 for r in ws.iter_rows(values_only=True):
                     buf_row = io.StringIO()
                     writer = csv.writer(buf_row)
-                    writer.writerow(['' if v is None else v for v in r])
-                    rows.append(buf_row.getvalue().strip('\n'))
+                    writer.writerow(["" if v is None else v for v in r])
+                    rows.append(buf_row.getvalue().strip("\n"))
                 result[ws.title] = rows
         return result
 
-    def process_rows_and_store(self, tenant_id: str, title: str, rows: List[str], knowledge_base_id: str, progress_job_id: str | None = None, sheet_name: str | None = None) -> Tuple[str, int]:
+    def process_rows_and_store(
+        self,
+        tenant_id: str,
+        title: str,
+        rows: List[str],
+        knowledge_base_id: str,
+        progress_job_id: str | None = None,
+        sheet_name: str | None = None,
+    ) -> Tuple[str, int]:
         try:
             # Validate tenant_id
             import uuid
+
             try:
                 uuid.UUID(tenant_id)
             except ValueError:
-                raise ValueError(f"Invalid tenant_id: {tenant_id}. Must be a valid UUID.")
-            
+                raise ValueError(
+                    f"Invalid tenant_id: {tenant_id}. Must be a valid UUID."
+                )
+
             if not rows:
                 raise ValueError("No rows provided to process")
-            
+
             kb_id = self._get_or_create_knowledge_base(tenant_id, knowledge_base_id)
-            preview = '\n'.join(rows[:5]) + ('\n...' if len(rows) > 5 else '')
-            doc = Document(title=title, content=preview, knowledge_base_id=kb_id, status="PROCESSING")
-            
+            preview = "\n".join(rows[:5]) + ("\n..." if len(rows) > 5 else "")
+            doc = Document(
+                title=title,
+                content=preview,
+                knowledge_base_id=kb_id,
+                status="PROCESSING",
+            )
+
             # Capture header columns if present (first row)
             if rows:
                 try:
@@ -1207,10 +1493,10 @@ class DocumentService:
                     data_rows = rows
             else:
                 data_rows = rows
-            
+
             if not data_rows:
                 raise ValueError("No data rows found after header extraction")
-            
+
             self.db.add(doc)
             self.db.commit()
             self.db.refresh(doc)
@@ -1218,12 +1504,19 @@ class DocumentService:
             if progress_job_id:
                 try:
                     from shared.cache.redis import redis_cache
-                    redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "embedding", "progress": 40}, ttl=3600)
+
+                    redis_cache.set_tenant_key(
+                        tenant_id,
+                        f"upload:job:{progress_job_id}",
+                        {"phase": "embedding", "progress": 40},
+                        ttl=3600,
+                    )
                 except Exception:
                     pass
             # Redact PII in raw row strings
             try:
                 from ai_core.services.redactor import Redactor
+
                 red = Redactor()
                 data_rows = [red.sanitize(r) for r in data_rows]
             except Exception:
@@ -1234,11 +1527,16 @@ class DocumentService:
             qdrant_payload: List[Dict[str, Any]] = []
             for idx, (row_text, emb) in enumerate(zip(data_rows, embeddings)):
                 import uuid as _uuid
+
                 chunk_id = _uuid.uuid4()
                 # Attach parsed row and sheet metadata for deterministic aggregation
                 meta_row: Dict[str, Any] = {}
                 try:
-                    header = (doc.meta or {}).get('columns') if isinstance(doc.meta, dict) else None
+                    header = (
+                        (doc.meta or {}).get("columns")
+                        if isinstance(doc.meta, dict)
+                        else None
+                    )
                     if isinstance(header, list):
                         reader = csv.reader(io.StringIO(row_text))
                         row_vals = next(reader)
@@ -1246,37 +1544,61 @@ class DocumentService:
                         for i, col in enumerate(header):
                             if i < len(row_vals):
                                 row_map[str(col).strip().lower()] = row_vals[i]
-                        meta_row['row'] = row_map
+                        meta_row["row"] = row_map
                 except Exception:
                     pass
                 if sheet_name:
-                    meta_row['sheet'] = sheet_name
+                    meta_row["sheet"] = sheet_name
                 # Encrypt and store preview
                 try:
-                    enc = crypto_service.encrypt(tenant_id, row_text.encode('utf-8'))
-                    kc = KnowledgeChunk(id=chunk_id, document_id=doc.id, content=row_text[:160], content_encrypted=enc, enc_ver=1, chunk_index=idx, embedding=emb, meta=meta_row)
+                    enc = crypto_service.encrypt(tenant_id, row_text.encode("utf-8"))
+                    kc = KnowledgeChunk(
+                        id=chunk_id,
+                        document_id=doc.id,
+                        content=row_text[:160],
+                        content_encrypted=enc,
+                        enc_ver=1,
+                        chunk_index=idx,
+                        embedding=emb,
+                        meta=meta_row,
+                    )
                 except Exception:
-                    kc = KnowledgeChunk(id=chunk_id, document_id=doc.id, content=row_text, chunk_index=idx, embedding=emb, meta=meta_row)
+                    kc = KnowledgeChunk(
+                        id=chunk_id,
+                        document_id=doc.id,
+                        content=row_text,
+                        chunk_index=idx,
+                        embedding=emb,
+                        meta=meta_row,
+                    )
                 self.db.add(kc)
                 if progress_job_id and idx % 50 == 0:
                     try:
                         from shared.cache.redis import redis_cache
+
                         pct = 40 + int(50 * (idx + 1) / max(1, len(data_rows)))
-                        redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "storing", "progress": min(90, pct)}, ttl=3600)
+                        redis_cache.set_tenant_key(
+                            tenant_id,
+                            f"upload:job:{progress_job_id}",
+                            {"phase": "storing", "progress": min(90, pct)},
+                            ttl=3600,
+                        )
                     except Exception:
                         pass
                 try:
-                    qdrant_payload.append({
-                        "id": str(chunk_id),
-                        "embedding": emb,
-                        "document_id": str(doc.id),
-                        "document_title": doc.title,
-                        "content": row_text,
-                        "chunk_index": idx,
-                        "chapter_num": None,
-                        "chapter_title": None,
-                        "metadata": meta_row or {},
-                    })
+                    qdrant_payload.append(
+                        {
+                            "id": str(chunk_id),
+                            "embedding": emb,
+                            "document_id": str(doc.id),
+                            "document_title": doc.title,
+                            "content": row_text,
+                            "chunk_index": idx,
+                            "chapter_num": None,
+                            "chapter_title": None,
+                            "metadata": meta_row or {},
+                        }
+                    )
                 except Exception:
                     pass
             doc.status = "INDEXED"
@@ -1286,25 +1608,41 @@ class DocumentService:
 
             # Best-effort: upsert to Qdrant when dimensions match expected size
             try:
-                if qdrant_payload and isinstance(qdrant_payload[0].get("embedding"), list):
-                    dim = len(qdrant_payload[0]["embedding"]) if qdrant_payload[0].get("embedding") else 0
+                if qdrant_payload and isinstance(
+                    qdrant_payload[0].get("embedding"), list
+                ):
+                    dim = (
+                        len(qdrant_payload[0]["embedding"])
+                        if qdrant_payload[0].get("embedding")
+                        else 0
+                    )
                     if dim in (1536, 3072, 1024):
                         try:
                             qdrant_service.create_collection()
                         except Exception:
                             pass
                         try:
-                            qdrant_service.upsert_knowledge_chunks(tenant_id, qdrant_payload)
+                            qdrant_service.upsert_knowledge_chunks(
+                                tenant_id, qdrant_payload
+                            )
                         except Exception as e:
-                            logging.getLogger(__name__).warning(f"Qdrant upsert skipped: {e}")
+                            logging.getLogger(__name__).warning(
+                                f"Qdrant upsert skipped: {e}"
+                            )
                     else:
-                        logging.getLogger(__name__).info("Skipping Qdrant upsert due to embedding dimension mismatch")
+                        logging.getLogger(__name__).info(
+                            "Skipping Qdrant upsert due to embedding dimension mismatch"
+                        )
             except Exception:
                 pass
 
             # Upsert schema field embeddings for CSV header if present
             try:
-                header = (doc.meta or {}).get('columns') if isinstance(doc.meta, dict) else None
+                header = (
+                    (doc.meta or {}).get("columns")
+                    if isinstance(doc.meta, dict)
+                    else None
+                )
                 if isinstance(header, list) and header:
                     col_texts: List[str] = []
                     col_names: List[str] = []
@@ -1321,13 +1659,21 @@ class DocumentService:
                         for cname, emb in zip(col_names, schema_embs):
                             if isinstance(emb, list) and len(emb) in (1536, 3072, 1024):
                                 import uuid as _uuid
-                                fid = str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"{tenant_id}:schema:{cname}"))
-                                ready.append({
-                                    "id": fid,
-                                    "embedding": emb,
-                                    "field_name": cname,
-                                    "description": f"{cname}"
-                                })
+
+                                fid = str(
+                                    _uuid.uuid5(
+                                        _uuid.NAMESPACE_URL,
+                                        f"{tenant_id}:schema:{cname}",
+                                    )
+                                )
+                                ready.append(
+                                    {
+                                        "id": fid,
+                                        "embedding": emb,
+                                        "field_name": cname,
+                                        "description": f"{cname}",
+                                    }
+                                )
                         if ready:
                             try:
                                 qdrant_service.create_collection()
@@ -1345,19 +1691,28 @@ class DocumentService:
                 "chunk_count": doc.chunk_count,
                 "status": doc.status,
             }
-            base_path = os.getenv("DOCUMENT_STORAGE_PATH", os.path.join(os.getcwd(), "storage"))
+            base_path = os.getenv(
+                "DOCUMENT_STORAGE_PATH", os.path.join(os.getcwd(), "storage")
+            )
             try:
                 write_metadata(base_path, tenant_id, str(doc.id), metadata)
             except Exception as e:
                 # Log but don't fail if metadata write fails
                 import logging
+
                 logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to write metadata: {e}")
-            
+
             if progress_job_id:
                 try:
                     from shared.cache.redis import redis_cache
-                    redis_cache.set_tenant_key(tenant_id, f"upload:job:{progress_job_id}", {"phase": "done", "progress": 100}, ttl=3600)
+
+                    redis_cache.set_tenant_key(
+                        tenant_id,
+                        f"upload:job:{progress_job_id}",
+                        {"phase": "done", "progress": 100},
+                        ttl=3600,
+                    )
                 except Exception:
                     pass
             return str(doc.id), len(rows)
@@ -1365,5 +1720,3 @@ class DocumentService:
             # Rollback on error
             self.db.rollback()
             raise
-
-

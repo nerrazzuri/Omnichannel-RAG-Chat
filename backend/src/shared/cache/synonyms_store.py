@@ -33,6 +33,6 @@ class SynonymsStore:
         current = cls.get_all(tenant_id)
         current.update({str(k): str(v) for k, v in mappings.items()})
         # Keep a TTL to allow refresh; extend on every write
-        redis_cache.set_tenant_key(tenant_id, cls._key(tenant_id), current, ttl=7 * 24 * 3600)
-
-
+        redis_cache.set_tenant_key(
+            tenant_id, cls._key(tenant_id), current, ttl=7 * 24 * 3600
+        )

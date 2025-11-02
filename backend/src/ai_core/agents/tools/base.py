@@ -24,7 +24,8 @@ class ToolSpec:
 
 class Tool(Protocol):
     spec: ToolSpec
-    def execute(self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
+
+    def execute(
+        self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         ...
-
-

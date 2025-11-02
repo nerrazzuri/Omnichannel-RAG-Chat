@@ -8,12 +8,20 @@ class FieldValueRetriever:
     def __init__(self):
         self._emb = EmbeddingService()
 
-    def search_rich(self, query: str, tenant_id: str, top_k: int = 8, emb: Optional[List[float]] = None) -> List[Dict[str, Any]]:
+    def search_rich(
+        self,
+        query: str,
+        tenant_id: str,
+        top_k: int = 8,
+        emb: Optional[List[float]] = None,
+    ) -> List[Dict[str, Any]]:
         e = emb if emb is not None else self._emb.embed_query(query, tenant_id)
         if not e:
             return []
         try:
-            results = qdrant_service.search_field_values(query_embedding=e, tenant_id=tenant_id, top_k=top_k)
+            results = qdrant_service.search_field_values(
+                query_embedding=e, tenant_id=tenant_id, top_k=top_k
+            )
             rich: List[Dict[str, Any]] = []
             for r in results:
                 payload = r.get("payload") or {}
@@ -32,20 +40,19 @@ class FieldValueRetriever:
                         f"File: {title}" if title else None,
                     ]
                     text = " | ".join([p for p in parts if p])
-                rich.append({
-                    "content": text,
-                    "field_name": payload.get("field_name"),
-                    "field_display": payload.get("field_display"),
-                    "value_raw": payload.get("value_raw"),
-                    "value_norm": payload.get("value_norm"),
-                    "document_id": payload.get("document_id"),
-                    "row_index": payload.get("row_index"),
-                    "score": r.get("score"),
-                    "meta": payload,
-                })
+                rich.append(
+                    {
+                        "content": text,
+                        "field_name": payload.get("field_name"),
+                        "field_display": payload.get("field_display"),
+                        "value_raw": payload.get("value_raw"),
+                        "value_norm": payload.get("value_norm"),
+                        "document_id": payload.get("document_id"),
+                        "row_index": payload.get("row_index"),
+                        "score": r.get("score"),
+                        "meta": payload,
+                    }
+                )
             return rich
         except Exception:
             return []
-
-
-

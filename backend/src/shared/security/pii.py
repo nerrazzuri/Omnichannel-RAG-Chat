@@ -9,7 +9,9 @@ _PII_PHONE = re.compile(r"\b(?:\+?\d[\s-]?){7,14}\b")
 _PII_ID_GENERIC = re.compile(r"\b[A-Z0-9]{6,12}\b")
 _PII_DOB_1 = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
 _PII_DOB_2 = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-_PII_ADDRESS = re.compile(r"\b(Street|St\.|Jalan|Blk|Avenue|Ave\.|Road|Rd\.)\b", re.IGNORECASE)
+_PII_ADDRESS = re.compile(
+    r"\b(Street|St\.|Jalan|Blk|Avenue|Ave\.|Road|Rd\.)\b", re.IGNORECASE
+)
 
 
 def redact(text: str) -> str:
@@ -22,5 +24,3 @@ def redact(text: str) -> str:
         s = _PII_ID_GENERIC.sub("[REDACTED_ID]", s)
         s = _PII_ADDRESS.sub("[REDACTED_ADDR]", s)
     return s
-
-

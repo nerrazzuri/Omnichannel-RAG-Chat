@@ -10,13 +10,15 @@ from shared.throttling.agent_limits import allow_tool_call
 def _normalize(items: List[Dict[str, Any]], source: str) -> Dict[str, Any]:
     results = []
     for it in items:
-        results.append({
-            "id": it.get("id") or it.get("doc_id") or it.get("url"),
-            "title": it.get("title") or it.get("name") or "",
-            "snippet": it.get("snippet") or it.get("summary") or "",
-            "url": it.get("url") or it.get("web_url") or "",
-            "source_system": source,
-        })
+        results.append(
+            {
+                "id": it.get("id") or it.get("doc_id") or it.get("url"),
+                "title": it.get("title") or it.get("name") or "",
+                "snippet": it.get("snippet") or it.get("summary") or "",
+                "url": it.get("url") or it.get("web_url") or "",
+                "source_system": source,
+            }
+        )
     return {"status": "ok", "results": results}
 
 
@@ -27,14 +29,25 @@ class SharePointSearch:
         version="1.0.0",
         description="Search SharePoint",
         category="read",
-        input_schema={"type": "object", "properties": {"query": {"type": "string"}, "scope": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]},
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "scope": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+        },
         output_schema={"type": "object"},
         required_scope="agent:tool:search.read",
         timeout_ms=agent_cfg.tool_default_timeout_ms,
         retries=agent_cfg.tool_retry_max,
         rate_limit_qps=agent_cfg.rate_limit_qps_per_tool,
     )
-    def execute(self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
+
+    def execute(
+        self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         tool = self.spec.tool_id
         agent_tool_metrics.inc_call(tenant_id, tool)
         if not allow_tool_call(tenant_id, tool, self.spec.rate_limit_qps):
@@ -51,14 +64,25 @@ class GoogleDriveSearch:
         version="1.0.0",
         description="Search Google Drive",
         category="read",
-        input_schema={"type": "object", "properties": {"query": {"type": "string"}, "scope": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]},
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "scope": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+        },
         output_schema={"type": "object"},
         required_scope="agent:tool:search.read",
         timeout_ms=agent_cfg.tool_default_timeout_ms,
         retries=agent_cfg.tool_retry_max,
         rate_limit_qps=agent_cfg.rate_limit_qps_per_tool,
     )
-    def execute(self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
+
+    def execute(
+        self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         tool = self.spec.tool_id
         agent_tool_metrics.inc_call(tenant_id, tool)
         if not allow_tool_call(tenant_id, tool, self.spec.rate_limit_qps):
@@ -74,14 +98,25 @@ class SalesforceSearch:
         version="1.0.0",
         description="Search Salesforce",
         category="read",
-        input_schema={"type": "object", "properties": {"query": {"type": "string"}, "scope": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]},
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "scope": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query"],
+        },
         output_schema={"type": "object"},
         required_scope="agent:tool:search.read",
         timeout_ms=agent_cfg.tool_default_timeout_ms,
         retries=agent_cfg.tool_retry_max,
         rate_limit_qps=agent_cfg.rate_limit_qps_per_tool,
     )
-    def execute(self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
+
+    def execute(
+        self, *, tenant_id: str, api_key_id: Optional[str], payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         tool = self.spec.tool_id
         agent_tool_metrics.inc_call(tenant_id, tool)
         if not allow_tool_call(tenant_id, tool, self.spec.rate_limit_qps):
@@ -93,5 +128,3 @@ class SalesforceSearch:
 sharepoint_search = SharePointSearch()
 googledrive_search = GoogleDriveSearch()
 salesforce_search = SalesforceSearch()
-
-

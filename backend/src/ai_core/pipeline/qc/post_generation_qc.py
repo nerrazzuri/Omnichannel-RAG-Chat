@@ -1,6 +1,5 @@
 from typing import List, Dict, Any, Optional
 
-import math
 import re
 from shared.config.tuning import qc
 
@@ -13,9 +12,11 @@ class PostGenerationQC:
         # Approximate copy-detection by character-level Jaccard on shingles
         if not output or not contexts:
             return 0.0
+
         def shingles(s: str, k: int = 8) -> set:
             s = s.lower()
-            return {s[i:i+k] for i in range(max(0, len(s) - k + 1))}
+            return {s[i : i + k] for i in range(max(0, len(s) - k + 1))}
+
         out_set = shingles(output)
         ctx_set = set()
         for c in contexts[:3]:
@@ -26,12 +27,31 @@ class PostGenerationQC:
         # Convert to a confidence proxy (higher when not copy-paste but still overlapping):
         return 1.0 - sim
 
-    def _rewrite_with_directive(self, llm_client, base_query: str, directive: str, contexts: List[Any], intent: str, result_hint: Optional[str]) -> Dict[str, Any]:
+    def _rewrite_with_directive(
+        self,
+        llm_client,
+        base_query: str,
+        directive: str,
+        contexts: List[Any],
+        intent: str,
+        result_hint: Optional[str],
+    ) -> Dict[str, Any]:
         # Preserve original intent and reinforce honoring of result_hint
         reinforced = f"{base_query}\n\n{directive}\nIf a structured result summary is provided, honor it exactly."
-        return llm_client.generate(reinforced, contexts, intent=intent, result_hint=result_hint)
+        return llm_client.generate(
+            reinforced, contexts, intent=intent, result_hint=result_hint
+        )
 
-    def run(self, llm_client, payload: Dict[str, Any], query: str, contexts: List[Any], intent: str, result_hint: Optional[str], meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        llm_client,
+        payload: Dict[str, Any],
+        query: str,
+        contexts: List[Any],
+        intent: str,
+        result_hint: Optional[str],
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         # Normalize payload API contract
         if "response" not in payload and "text" in payload:
             payload["response"] = payload.get("text", "")
@@ -46,7 +66,11 @@ class PostGenerationQC:
         # Collect valid snippet IDs for orphan cleanup
         valid_ids: List[str] = []
         try:
-            valid_ids = [str(c.get("id")).strip() for c in contexts if isinstance(c, dict) and c.get("id")]
+            valid_ids = [
+                str(c.get("id")).strip()
+                for c in contexts
+                if isinstance(c, dict) and c.get("id")
+            ]
         except Exception:
             valid_ids = []
         # Citation enforcement: require [S#] when contexts exist
@@ -75,7 +99,15 @@ class PostGenerationQC:
         else:
             orphan_rate = 0.0
         coverage = self._citation_coverage(text)
-        min_ratio = qc.citation_min_ratio_lookup if intent == "lookup" else (qc.citation_min_ratio_compare if intent == "compare" else qc.citation_min_ratio_summary)
+        min_ratio = (
+            qc.citation_min_ratio_lookup
+            if intent == "lookup"
+            else (
+                qc.citation_min_ratio_compare
+                if intent == "compare"
+                else qc.citation_min_ratio_summary
+            )
+        )
         # Hallucination heuristic: words not in context vocabulary
         hall_score = self._hallucination_score(text, ctx_texts)
         # Length control
@@ -84,7 +116,11 @@ class PostGenerationQC:
             payload["response"] = text
             # After truncation, re-check coverage and try one add-tags pass if budget remains
             coverage = self._citation_coverage(text)
-            if has_context and coverage < min_ratio and rewrite_count < qc.rewrite_max_attempts:
+            if (
+                has_context
+                and coverage < min_ratio
+                and rewrite_count < qc.rewrite_max_attempts
+            ):
                 regen = self._rewrite_with_directive(
                     llm_client,
                     query,
@@ -104,7 +140,9 @@ class PostGenerationQC:
             text = re.sub(r"(?i)i am an ai language model.*?\.?\s*", "", text)
             payload["response"] = text
         if qc.tenant_policy_footer:
-            payload["response"] = (payload["response"] + "\n\n" + qc.tenant_policy_footer).strip()
+            payload["response"] = (
+                payload["response"] + "\n\n" + qc.tenant_policy_footer
+            ).strip()
         # Validate URLs or titles without [S#]
         if has_context:
             raw_urls = re.findall(r"https?://\S+", text)
@@ -148,16 +186,19 @@ class PostGenerationQC:
         # Log citation coverage metrics
         try:
             from shared.logging.pipeline_logger import PipelineLogger
-            PipelineLogger(tenant_id).emit({
-                "citations": {
-                    "ids_present": re.findall(r"\[S\d+\]", text),
-                    "coverage": coverage,
-                    "hallucination_score": hall_score,
-                    "orphan_rate": orphan_rate,
-                    "rewrite_count": rewrite_count,
-                    "met_threshold": coverage >= min_ratio,
+
+            PipelineLogger(tenant_id).emit(
+                {
+                    "citations": {
+                        "ids_present": re.findall(r"\[S\d+\]", text),
+                        "coverage": coverage,
+                        "hallucination_score": hall_score,
+                        "orphan_rate": orphan_rate,
+                        "rewrite_count": rewrite_count,
+                        "met_threshold": coverage >= min_ratio,
+                    }
                 }
-            })
+            )
         except Exception:
             pass
         payload["qc_status"] = {
@@ -173,7 +214,7 @@ class PostGenerationQC:
     def _citation_coverage(self, text: str) -> float:
         sents = [s for s in re.split(r"[.!?]", text or "") if s.strip()]
         cited = [s for s in sents if re.search(r"\[S\d+\]", s)]
-        return (len(cited) / (len(sents) or 1))
+        return len(cited) / (len(sents) or 1)
 
     def _hallucination_score(self, text: str, ctx_texts: List[str]) -> float:
         # Very rough heuristic: percentage of content words absent from context vocab
@@ -200,6 +241,7 @@ class PostGenerationQC:
             return text, 0.0
         total = len(tags)
         orphans = 0
+
         def tag_replacer(m):
             nonlocal orphans
             tg = m.group(1)
@@ -207,8 +249,7 @@ class PostGenerationQC:
                 return f"[{tg}]"
             orphans += 1
             return ""
+
         new_text = re.sub(r"\[(S\d+)\]", tag_replacer, text)
         rate = orphans / float(total or 1)
         return new_text, rate
-
-

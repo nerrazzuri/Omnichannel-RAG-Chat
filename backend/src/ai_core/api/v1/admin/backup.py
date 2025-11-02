@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from shared.database.session import SessionLocal
 from shared.metrics.backup_metrics import backup_metrics
+from shared.metrics.qdrant_snapshot_metrics import qdrant_snapshot_metrics
 import time
 
 
@@ -28,6 +29,10 @@ def _require_admin(request: Request):
     scopes = set((claims.get("scopes") or []))
     if role == "ADMIN" or "backup:write" in scopes:
         return True
+    try:
+        backup_metrics.inc_auth_fail()
+    except Exception:
+        pass
     raise HTTPException(status_code=403, detail="forbidden")
 
 
@@ -37,6 +42,8 @@ class BackupMark(BaseModel):
     duration_ms: int | None = None
     size_bytes: int | None = None
     ts_unix: int | None = None
+    collection: str | None = None
+    checksum_sha256: str | None = None
 
 
 @router.post("/mark")
@@ -45,6 +52,9 @@ def mark_backup(payload: BackupMark, request: Request, db: Session = Depends(get
     now = int(payload.ts_unix or time.time())
     ok = payload.status == "success"
     backup_metrics.mark(payload.system, ok, now, payload.duration_ms, payload.size_bytes)
+    if ok and payload.system == "qdrant" and payload.collection:
+        try:
+            qdrant_snapshot_metrics.mark(payload.collection, int(payload.size_bytes or 0), now)
+        except Exception:
+            pass
     return {"ok": True}
-
-

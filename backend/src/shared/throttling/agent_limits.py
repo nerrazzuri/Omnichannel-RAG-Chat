@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 from shared.cache.redis import redis_cache
 
 
@@ -16,5 +15,3 @@ def allow_tool_call(tenant_id: str, tool_id: str, qps: int) -> bool:
     except Exception:
         # fail open if redis not available
         return True
-
-

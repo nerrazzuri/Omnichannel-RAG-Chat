@@ -6,12 +6,19 @@ from typing import Dict, Any
 class Policy:
     ROLES = {
         "ADMIN": {"admin:*", "ingestion:*", "retrieval:*", "conversation:*"},
-        "WRITER": {"ingestion:*", "retrieval:read", "conversation:write", "conversation:read"},
+        "WRITER": {
+            "ingestion:*",
+            "retrieval:read",
+            "conversation:write",
+            "conversation:read",
+        },
         "READER": {"retrieval:read", "conversation:read"},
     }
 
     @classmethod
-    def allowed(cls, claims: Dict[str, Any], action: str, resource: Dict[str, Any] | None = None) -> bool:
+    def allowed(
+        cls, claims: Dict[str, Any], action: str, resource: Dict[str, Any] | None = None
+    ) -> bool:
         if not claims:
             return False
         role = str(claims.get("role", "")).upper()
@@ -30,6 +37,10 @@ class Policy:
         if not base_ok:
             return False
         # ABAC: restricted classification requires ADMIN
-        if resource and resource.get("classification") == "restricted" and role != "ADMIN":
+        if (
+            resource
+            and resource.get("classification") == "restricted"
+            and role != "ADMIN"
+        ):
             return False
         return True

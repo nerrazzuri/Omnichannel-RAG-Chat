@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-scripts
+data:
+  pg_backup.sh: |
+    #!/bin/bash
+    /scripts-mounted/pg_backup.sh
+  redis_backup.sh: |
+    #!/bin/bash
+    /scripts-mounted/redis_backup.sh
+  qdrant_backup.sh: |
+    #!/bin/bash
+    /scripts-mounted/qdrant_backup.sh
+

@@ -36,6 +36,7 @@ def write_audit(
     """Enqueue audit entry; fall back to direct write if queue unavailable."""
     try:
         from shared.queue.retry_queue import retry_queue
+
         payload = {
             "tenant_id": tenant_id,
             "user_id": user_id,
@@ -60,7 +61,10 @@ def write_audit(
         return
     except Exception as e:
         import logging
-        logging.getLogger(__name__).exception("[audit.enqueue] error", extra={"tenant_id": tenant_id, "action": action})
+
+        logging.getLogger(__name__).exception(
+            "[audit.enqueue] error", extra={"tenant_id": tenant_id, "action": action}
+        )
 
     try:
         rec = AuditLog(
@@ -87,18 +91,23 @@ def write_audit(
         db.commit()
     except Exception as e:
         import logging
-        logging.getLogger(__name__).exception("[audit.write] error", extra={"tenant_id": tenant_id, "action": action})
+
+        logging.getLogger(__name__).exception(
+            "[audit.write] error", extra={"tenant_id": tenant_id, "action": action}
+        )
         try:
             db.rollback()
         except Exception as e2:
-            logging.getLogger(__name__).exception("[audit.rollback] error", extra={"tenant_id": tenant_id})
-
+            logging.getLogger(__name__).exception(
+                "[audit.rollback] error", extra={"tenant_id": tenant_id}
+            )
 
 
 def write_vault_audit(key_name: str, correlation_id: Optional[str] = None) -> None:
     """Record a vault.fetch event via retry queue (no DB requirement)."""
     try:
         from shared.queue.retry_queue import retry_queue
+
         payload = {
             "tenant_id": vault_cfg.system_tenant_id,
             "user_id": None,
@@ -124,4 +133,3 @@ def write_vault_audit(key_name: str, correlation_id: Optional[str] = None) -> No
     except Exception:
         # best-effort only
         pass
-

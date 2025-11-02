@@ -2,13 +2,14 @@
 JWT token service with multi-tenant validation and refresh token support.
 """
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any
 import jwt
 from jwt.exceptions import InvalidTokenError, ExpiredSignatureError, DecodeError
 import os
 import logging
 
 logger = logging.getLogger(__name__)
+
 
 class JWTService:
     """JWT token service with multi-tenant support."""
@@ -30,7 +31,7 @@ class JWTService:
         tenant_id: str,
         user_type: str,
         role: str,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Create a JWT access token."""
         to_encode = {
@@ -38,29 +39,29 @@ class JWTService:
             "tenant_id": tenant_id,
             "user_type": user_type,
             "role": role,
-            "exp": datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes),
+            "exp": datetime.utcnow()
+            + timedelta(minutes=self.access_token_expire_minutes),
             "iat": datetime.utcnow(),
             "type": "access",
-            "iss": "omnichannel-chatbot"
+            "iss": "omnichannel-chatbot",
         }
 
         if additional_claims:
             to_encode.update(additional_claims)
 
         try:
-            encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-            logger.info(f"Created access token for user {user_id} in tenant {tenant_id}")
+            encoded_jwt = jwt.encode(
+                to_encode, self.secret_key, algorithm=self.algorithm
+            )
+            logger.info(
+                f"Created access token for user {user_id} in tenant {tenant_id}"
+            )
             return encoded_jwt
         except Exception as e:
             logger.error(f"Failed to create access token: {e}")
             raise
 
-    def create_refresh_token(
-        self,
-        user_id: str,
-        tenant_id: str,
-        user_type: str
-    ) -> str:
+    def create_refresh_token(self, user_id: str, tenant_id: str, user_type: str) -> str:
         """Create a JWT refresh token."""
         to_encode = {
             "user_id": user_id,
@@ -69,12 +70,16 @@ class JWTService:
             "exp": datetime.utcnow() + timedelta(days=self.refresh_token_expire_days),
             "iat": datetime.utcnow(),
             "type": "refresh",
-            "iss": "omnichannel-chatbot"
+            "iss": "omnichannel-chatbot",
         }
 
         try:
-            encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
-            logger.info(f"Created refresh token for user {user_id} in tenant {tenant_id}")
+            encoded_jwt = jwt.encode(
+                to_encode, self.secret_key, algorithm=self.algorithm
+            )
+            logger.info(
+                f"Created refresh token for user {user_id} in tenant {tenant_id}"
+            )
             return encoded_jwt
         except Exception as e:
             logger.error(f"Failed to create refresh token: {e}")
@@ -87,7 +92,7 @@ class JWTService:
                 token,
                 self.secret_key,
                 algorithms=[self.algorithm],
-                issuer="omnichannel-chatbot"
+                issuer="omnichannel-chatbot",
             )
 
             # Validate token type
@@ -124,7 +129,7 @@ class JWTService:
             user_id=payload["user_id"],
             tenant_id=payload["tenant_id"],
             user_type=payload["user_type"],
-            role=payload.get("role", "END_USER")
+            role=payload.get("role", "END_USER"),
         )
 
     def get_tenant_id_from_token(self, token: str) -> Optional[str]:
@@ -145,6 +150,7 @@ class JWTService:
 
         token_tenant_id = payload.get("tenant_id")
         return token_tenant_id == tenant_id
+
 
 # Global JWT service instance
 jwt_service = JWTService()

@@ -41,5 +41,3 @@ class SalesforceConnector(BaseConnector):
             classification="internal",
             metadata={"connector": self.name},
         )
-
-

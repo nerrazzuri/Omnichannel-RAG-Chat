@@ -17,15 +17,24 @@ security = HTTPBearer(auto_error=False)
 def require(action: str, resource: Dict[str, Any] | None = None):
     async def _inner(
         creds: HTTPAuthorizationCredentials = Depends(security),
-        db = Depends(get_db),
+        db=Depends(get_db),
         request: Request = None,
     ) -> Dict[str, Any]:
         # Temporary bypass for local testing (set AUTH_ALLOW_ALL=1). Returns ADMIN claims.
         if os.getenv("AUTH_ALLOW_ALL", "false").lower() in ("1", "true", "yes"):
-            claims = {"user_id": "dev-admin", "tenant_id": os.getenv("AUTH_BYPASS_TENANT", "00000000-0000-0000-0000-000000000001"), "role": "ADMIN"}
+            claims = {
+                "user_id": "dev-admin",
+                "tenant_id": os.getenv(
+                    "AUTH_BYPASS_TENANT", "00000000-0000-0000-0000-000000000001"
+                ),
+                "role": "ADMIN",
+            }
             try:
                 from shared.logging.pipeline_logger import PipelineLogger
-                PipelineLogger(claims["tenant_id"]).emit({"auth_bypass": {"action": action}})
+
+                PipelineLogger(claims["tenant_id"]).emit(
+                    {"auth_bypass": {"action": action}}
+                )
             except Exception:
                 pass
             return claims
@@ -43,17 +52,43 @@ def require(action: str, resource: Dict[str, Any] | None = None):
             # Audit denial
             try:
                 from shared.logging.pipeline_logger import PipelineLogger
+
                 tenant = str(claims.get("tenant_id", "global"))
-                PipelineLogger(tenant).emit({
-                    "audit": {"action": action, "user_id": claims.get("user_id"), "denied": True}
-                })
+                PipelineLogger(tenant).emit(
+                    {
+                        "audit": {
+                            "action": action,
+                            "user_id": claims.get("user_id"),
+                            "denied": True,
+                        }
+                    }
+                )
                 # persistent audit
-                corr = getattr(request.state, "correlation_id", None) if request else None
-                write_audit(db=db, tenant_id=tenant, user_id=claims.get("user_id"), action=f"policy.denied:{action}", resource="policy", request_text="", response_text="", success=False, latency_ms=0, category="access", auth_type=getattr(request.state, "auth_type", None) if request else None, api_key_id=getattr(request.state, "api_key_id", None) if request else None, correlation_id=corr)
+                corr = (
+                    getattr(request.state, "correlation_id", None) if request else None
+                )
+                write_audit(
+                    db=db,
+                    tenant_id=tenant,
+                    user_id=claims.get("user_id"),
+                    action=f"policy.denied:{action}",
+                    resource="policy",
+                    request_text="",
+                    response_text="",
+                    success=False,
+                    latency_ms=0,
+                    category="access",
+                    auth_type=getattr(request.state, "auth_type", None)
+                    if request
+                    else None,
+                    api_key_id=getattr(request.state, "api_key_id", None)
+                    if request
+                    else None,
+                    correlation_id=corr,
+                )
             except Exception:
                 pass
             raise HTTPException(status_code=403, detail="Forbidden")
         return claims
+
     return _inner
-
-

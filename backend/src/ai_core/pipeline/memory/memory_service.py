@@ -17,7 +17,9 @@ _PII_PHONE = re.compile(r"\b(?:\+?\d[\s-]?){7,14}\b")
 _PII_ID_GENERIC = re.compile(r"\b[A-Z0-9]{6,12}\b")
 _PII_DOB_1 = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
 _PII_DOB_2 = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-_PII_ADDRESS = re.compile(r"\b(Street|St\.|Jalan|Blk|Avenue|Ave\.|Road|Rd\.)\b", re.IGNORECASE)
+_PII_ADDRESS = re.compile(
+    r"\b(Street|St\.|Jalan|Blk|Avenue|Ave\.|Road|Rd\.)\b", re.IGNORECASE
+)
 
 
 def _redact_pii(text: str) -> str:
@@ -38,7 +40,9 @@ class MemoryService:
         self.db = db
         self._llm = LLMClient()
 
-    def append_turn(self, tenant_id: str, session_id: str, role: str, content: str) -> None:
+    def append_turn(
+        self, tenant_id: str, session_id: str, role: str, content: str
+    ) -> None:
         now = datetime.now(timezone.utc)
         exp = now + timedelta(days=mem_cfg.ttl_days)
         safe = _redact_pii(content or "")
@@ -64,10 +68,14 @@ class MemoryService:
             "Do not repeat greetings or small talk.\n"
             "Use 3-7 bullets."
         )
-        out = self._llm.generate(query=prompt, contexts=[history_text], intent="summary", result_hint=None)
+        out = self._llm.generate(
+            query=prompt, contexts=[history_text], intent="summary", result_hint=None
+        )
         return out.get("text", "").strip()
 
-    def update_summary(self, tenant_id: str, session_id: str, new_history_summary: str) -> str:
+    def update_summary(
+        self, tenant_id: str, session_id: str, new_history_summary: str
+    ) -> str:
         # fetch existing summary row if any
         existing = (
             self.db.query(ConversationMemory)
@@ -83,7 +91,12 @@ class MemoryService:
                 "Combine the PRIOR SUMMARY with NEW EVENTS into a single concise bullet summary.\n"
                 "Keep facts, decisions, and unresolved questions. Limit to 5-9 bullets."
             )
-            out = self._llm.generate(query=combine_prompt, contexts=[existing.summary, new_history_summary], intent="summary", result_hint=None)
+            out = self._llm.generate(
+                query=combine_prompt,
+                contexts=[existing.summary, new_history_summary],
+                intent="summary",
+                result_hint=None,
+            )
             merged = out.get("text", "").strip() or new_history_summary
             # update existing
             existing.summary = merged
@@ -110,7 +123,9 @@ class MemoryService:
             pass
         return merged
 
-    def get_context(self, tenant_id: str, session_id: str, limit_recent: int = 5) -> Dict[str, Any]:
+    def get_context(
+        self, tenant_id: str, session_id: str, limit_recent: int = 5
+    ) -> Dict[str, Any]:
         q = (
             self.db.query(ConversationMemory)
             .filter(ConversationMemory.tenant_id == uuid.UUID(str(tenant_id)))
@@ -135,8 +150,10 @@ class MemoryService:
         recent = rows[-limit_recent:]
         recent_turns = [f"{r.role}: {r.content}" for r in recent]
         combo = ((summary or "") + "\n" + "\n".join(recent_turns)).strip()
+
         def _estimate_tokens(s: str) -> int:
             return len((s or "").split())
+
         pruned = 0
         while _estimate_tokens(combo) > mem_cfg.max_context_tokens and recent_turns:
             # prune according to strategy (currently only oldest makes sense on recent list)
@@ -152,5 +169,3 @@ class MemoryService:
             except Exception:
                 pass
         return {"recent_turns": recent_turns, "summary": summary}
-
-

@@ -20,5 +20,3 @@ class ConnectorRegistry:
 
 
 registry = ConnectorRegistry()
-
-

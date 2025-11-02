@@ -17,5 +17,3 @@ def test_critical_tables_columns_exist():
     ]
     for t in must_tables:
         assert insp.has_table(t), f"missing table {t}"
-
-

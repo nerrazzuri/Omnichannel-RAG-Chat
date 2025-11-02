@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
-from shared.config.tuning import agents as agent_cfg
 from shared.database.models import ApiKey, Approval
 from shared.metrics.agent_tool_metrics import agent_tool_metrics
 from shared.security.pii import redact
@@ -27,7 +26,9 @@ class PolicyEngine:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def _has_scope(self, tenant_id: str, api_key_id: Optional[str], required_scope: str) -> bool:
+    def _has_scope(
+        self, tenant_id: str, api_key_id: Optional[str], required_scope: str
+    ) -> bool:
         if not api_key_id:
             return False
         try:
@@ -41,7 +42,18 @@ class PolicyEngine:
             return False
         return False
 
-    def decide(self, *, tenant_id: str, api_key_id: Optional[str], tool_id: str, category: str, payload: Dict[str, Any], sensitive: bool, require_scope: str, preapproval_default: bool) -> PolicyDecision:
+    def decide(
+        self,
+        *,
+        tenant_id: str,
+        api_key_id: Optional[str],
+        tool_id: str,
+        category: str,
+        payload: Dict[str, Any],
+        sensitive: bool,
+        require_scope: str,
+        preapproval_default: bool,
+    ) -> PolicyDecision:
         # Scope check
         if not self._has_scope(tenant_id, api_key_id, require_scope):
             agent_tool_metrics.inc_denial(tenant_id, tool_id)
@@ -52,10 +64,17 @@ class PolicyEngine:
         if category in ("write", "admin") and (preapproval_default or sensitive):
             aid = self._create_approval(tenant_id, tool_id, payload)
             agent_tool_metrics.inc_approval_requested(tenant_id, tool_id)
-            return PolicyDecision(allowed=False, requires_approval=True, approval_id=aid, reason="pending_approval")
+            return PolicyDecision(
+                allowed=False,
+                requires_approval=True,
+                approval_id=aid,
+                reason="pending_approval",
+            )
         return PolicyDecision(allowed=True)
 
-    def _create_approval(self, tenant_id: str, tool_id: str, payload: Dict[str, Any]) -> str:
+    def _create_approval(
+        self, tenant_id: str, tool_id: str, payload: Dict[str, Any]
+    ) -> str:
         ah = _h(redact(str(payload)))
         rec = Approval(
             tenant_id=uuid.UUID(str(tenant_id)),
@@ -69,9 +88,19 @@ class PolicyEngine:
         # Audit request
         try:
             from ai_core.pipeline.audit_service import write_audit
-            write_audit(self.db, tenant_id, None, "agent.approval.request", tool_id, str(payload), "", True, 0, category="agent")
+
+            write_audit(
+                self.db,
+                tenant_id,
+                None,
+                "agent.approval.request",
+                tool_id,
+                str(payload),
+                "",
+                True,
+                0,
+                category="agent",
+            )
         except Exception:
             pass
         return str(rec.id)
-
-

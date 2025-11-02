@@ -1,0 +1,31 @@
+groups:
+  - name: compliance-pipeline
+    rules:
+      - alert: ComplianceReportStale
+        expr: time() - ai_core_compliance_last_run_timestamp > 24*3600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Compliance report stale (>24h)"
+          description: "Last run was more than 24 hours ago."
+
+      - alert: ComplianceNonCompliantTenants
+        expr: ai_core_compliance_noncompliant_tenants_total > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tenants non-compliant"
+          description: "One or more tenants are marked non-compliant."
+
+      - alert: ComplianceGenerationFailures
+        expr: increase(ai_core_compliance_failed_reports_total[24h]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Compliance report generation failures"
+          description: "More than one failure in the last 24 hours."
+
+

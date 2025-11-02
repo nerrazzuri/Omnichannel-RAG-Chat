@@ -15,5 +15,3 @@ tool_registry.register(file_export_tool)
 tool_registry.register(sharepoint_search)
 tool_registry.register(googledrive_search)
 tool_registry.register(salesforce_search)
-
-

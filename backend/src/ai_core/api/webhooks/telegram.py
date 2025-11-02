@@ -1,7 +1,7 @@
 """
 Telegram webhook handler.
 """
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException
 from typing import Dict, Any
 from shared.services.session_service import SessionService
 from shared.utils.channel_adapter import ChannelAdapter
@@ -19,7 +19,7 @@ async def telegram_webhook(request: Request) -> Dict[str, Any]:
     if not user_identifier:
         raise HTTPException(status_code=400, detail="Invalid Telegram payload")
     session_id = session_service.get_or_create_session(tenant_id, user_identifier)
-    session_service.set_channel_mapping(tenant_id, session_id, "telegram", user_identifier)
+    session_service.set_channel_mapping(
+        tenant_id, session_id, "telegram", user_identifier
+    )
     return {"status": "accepted", "sessionId": session_id}
-
-

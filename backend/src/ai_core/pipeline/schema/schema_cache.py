@@ -3,6 +3,7 @@ from typing import Dict, List
 
 class SchemaCache:
     """In-memory cache facade for schema fields per tenant (placeholder)."""
+
     def __init__(self):
         self._cache: Dict[str, List[str]] = {}
 
@@ -11,5 +12,3 @@ class SchemaCache:
 
     def set(self, tenant_id: str, fields: List[str]) -> None:
         self._cache[tenant_id] = list(fields)
-
-

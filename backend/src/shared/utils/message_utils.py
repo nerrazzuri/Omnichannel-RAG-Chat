@@ -14,12 +14,12 @@ def normalize_whatsapp(payload: Dict[str, Any]) -> Dict[str, Any]:
     from_id = msg.get("from", "")
     return {
         "channel": "whatsapp",
-        "tenantId": value.get("metadata", {}).get("display_phone_number", "default-tenant"),
+        "tenantId": value.get("metadata", {}).get(
+            "display_phone_number", "default-tenant"
+        ),
         "userId": from_id,
         "message": text,
         "context": {
             "conversationId": msg.get("id"),
         },
     }
-
-

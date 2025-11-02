@@ -20,5 +20,3 @@ def test_response_formatting_preserves_newlines_and_bullets():
     # Ensure no CRLF or double newlines remain
     assert "\r" not in out
     assert "\n\n" not in out
-
-

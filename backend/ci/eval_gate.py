@@ -23,7 +23,9 @@ def gate_for_tier(tier: str) -> float:
 def main():
     parser = argparse.ArgumentParser(description="Run eval suites and gate build")
     parser.add_argument("--tenant", required=True)
-    parser.add_argument("--suites", required=True, help="Directory containing *.json suites")
+    parser.add_argument(
+        "--suites", required=True, help="Directory containing *.json suites"
+    )
     parser.add_argument("--tier", default=os.getenv("CI_TIER", "staging"))
     parser.add_argument("--out", default="ci/artifacts/eval_summary.json")
     args = parser.parse_args()
@@ -32,7 +34,12 @@ def main():
     out_dir = Path(args.out).parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    summary: Dict[str, Any] = {"tenant": args.tenant, "tier": args.tier, "results": {}, "passed": True}
+    summary: Dict[str, Any] = {
+        "tenant": args.tenant,
+        "tier": args.tier,
+        "results": {},
+        "passed": True,
+    }
     min_f1_required = gate_for_tier(args.tier)
     for suite_file in suites_dir.glob("*.json"):
         res = run_suite(args.tenant, str(suite_file), suite_name=suite_file.stem)
@@ -59,5 +66,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

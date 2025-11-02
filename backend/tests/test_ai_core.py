@@ -14,6 +14,7 @@ from ai_core.main import app  # noqa: E402
 
 client = TestClient(app)
 
+
 def test_health_check():
     """Test health check endpoint."""
     response = client.get("/v1/health")
@@ -24,13 +25,14 @@ def test_health_check():
     assert "version" in data
     assert "timestamp" in data
 
+
 def test_query_endpoint():
     """Test query endpoint with valid request."""
     request_data = {
         "tenant_id": "test-tenant",
         "user_id": "test-user",
         "message": "Hello, how are you?",
-        "channel": "web"
+        "channel": "web",
     }
 
     response = client.post("/v1/query", json=request_data)
@@ -40,6 +42,7 @@ def test_query_endpoint():
     assert "citations" in data
     assert "confidence" in data
     assert "requires_human" in data
+
 
 def test_query_endpoint_missing_fields():
     """Test query endpoint with missing required fields."""
@@ -51,12 +54,13 @@ def test_query_endpoint_missing_fields():
     response = client.post("/v1/query", json=request_data)
     assert response.status_code == 400
 
+
 def test_query_endpoint_invalid_channel():
     """Test query endpoint with invalid channel."""
     request_data = {
         "tenant_id": "test-tenant",
         "message": "Hello",
-        "channel": "invalid_channel"
+        "channel": "invalid_channel",
     }
 
     response = client.post("/v1/query", json=request_data)

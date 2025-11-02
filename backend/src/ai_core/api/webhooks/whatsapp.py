@@ -24,10 +24,10 @@ async def whatsapp_webhook(request: Request) -> Dict[str, Any]:
     body = await request.body()
     if secret:
         if not signature or not verify_signature(body, signature, secret):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature"
+            )
 
     payload = await request.json()
     normalized = normalize_whatsapp(payload)
     return {"status": "accepted", "normalized": normalized}
-
-

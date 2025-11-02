@@ -1,0 +1,53 @@
+{
+  "title": "Release Readiness",
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Uptime (s)",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "time() - process_start_time_seconds{job=\"ai-core\"}"}],
+      "options": {"reduceOptions": {"calcs": ["last"], "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Exceptions (rate)",
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "targets": [{"expr": "rate(ai_core_exceptions_total[5m])"}],
+      "options": {"reduceOptions": {"calcs": ["last"], "values": false}}
+    },
+    {
+      "type": "stat",
+      "title": "Alert Failures (24h)",
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+      "targets": [{"expr": "increase(ai_core_compliance_failed_reports_total[24h])"}],
+      "options": {"reduceOptions": {"calcs": ["last"], "values": false}}
+    },
+    {
+      "type": "gauge",
+      "title": "CPU Usage % (ai-core)",
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 6},
+      "targets": [{"expr": "100 * sum(rate(container_cpu_usage_seconds_total{pod=~\"ai-core.*\"}[5m]))"}],
+      "fieldConfig": {"defaults": {"min": 0, "max": 400}}
+    },
+    {
+      "type": "gauge",
+      "title": "Memory (MiB) (ai-core)",
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 6},
+      "targets": [{"expr": "sum(container_memory_usage_bytes{pod=~\"ai-core.*\"})/1024/1024"}]
+    },
+    {
+      "type": "graph",
+      "title": "HTTP 5xx (rate)",
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 6},
+      "targets": [{"expr": "rate(ai_core_requests_total{status=\"500\"}[5m])"}],
+      "lines": true,
+      "linewidth": 2
+    }
+  ]
+}
+
+

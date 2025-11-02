@@ -3,7 +3,8 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 import os
 import sys
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, BASE_DIR)
 from shared.database.models import Base  # noqa: E402
 
@@ -26,6 +27,7 @@ target_metadata = Base.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -65,9 +67,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

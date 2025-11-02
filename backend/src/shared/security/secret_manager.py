@@ -22,7 +22,9 @@ class SecretManager:
                     pass
                 return val
         except Exception as e:
-            logging.getLogger(__name__).warning("[secret.fetch] vault fallback for %s", name)
+            logging.getLogger(__name__).warning(
+                "[secret.fetch] vault fallback for %s", name
+            )
         # .env already loaded by app; Docker secrets (file mounts) prefixed with _FILE
         file_var = os.getenv(name + "_FILE")
         if file_var and os.path.isfile(file_var):  # type: ignore
@@ -41,5 +43,3 @@ class SecretManager:
 
 
 secret_manager = SecretManager()
-
-

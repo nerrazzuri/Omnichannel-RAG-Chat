@@ -5,7 +5,7 @@ import time
 from typing import Callable, Any, Optional
 import logging
 
-from shared.config.tuning import retries, telemetry
+from shared.config.tuning import retries
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,9 @@ def retry_with_backoff(
                     jitter = random.randint(0, max(0, jt))
                     _delay = min(md, delay + jitter)
                     try:
-                        logger.warning(f"retry({operation}): attempt={attempt}/{ma} sleeping_ms={_delay} error={e}")
+                        logger.warning(
+                            f"retry({operation}): attempt={attempt}/{ma} sleeping_ms={_delay} error={e}"
+                        )
                     except Exception:
                         pass
                     _sleep_ms(_delay)
@@ -63,8 +65,7 @@ def retry_with_backoff(
             if last_exc:
                 raise last_exc
             return None
+
         return _wrapped
+
     return _decorator
-
-
-

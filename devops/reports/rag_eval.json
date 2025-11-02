@@ -1,0 +1,30 @@
+{
+  "base": "http://localhost:8000",
+  "ts": 1762071333,
+  "results": [
+    {
+      "name": "doc_lookup",
+      "status": 404,
+      "ok": false,
+      "response": {
+        "detail": "Not Found"
+      }
+    },
+    {
+      "name": "aggregate_count",
+      "status": 404,
+      "ok": false,
+      "response": {
+        "detail": "Not Found"
+      }
+    },
+    {
+      "name": "compare_depts",
+      "status": 404,
+      "ok": false,
+      "response": {
+        "detail": "Not Found"
+      }
+    }
+  ]
+}

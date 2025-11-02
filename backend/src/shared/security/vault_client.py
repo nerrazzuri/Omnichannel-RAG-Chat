@@ -27,10 +27,15 @@ class VaultClient:
     """
 
     def __init__(self) -> None:
-        self.enabled = bool(vault_cfg.enabled and vault_cfg.addr and vault_cfg.token and vault_cfg.mount_path)
-        self.addr = vault_cfg.addr.rstrip('/')
+        self.enabled = bool(
+            vault_cfg.enabled
+            and vault_cfg.addr
+            and vault_cfg.token
+            and vault_cfg.mount_path
+        )
+        self.addr = vault_cfg.addr.rstrip("/")
         self.token = vault_cfg.token
-        self.mount_path = vault_cfg.mount_path.strip('/')
+        self.mount_path = vault_cfg.mount_path.strip("/")
         self.cache_ttl = max(1, int(vault_cfg.cache_ttl_s))
         self.refresh_interval = max(1, int(vault_cfg.refresh_interval_s))
         self._cache: Dict[str, Dict[str, object]] = {}
@@ -59,7 +64,9 @@ class VaultClient:
                     try:
                         _ = self._fetch_remote(key, force=True)
                     except Exception as e:
-                        _logger.warning("[vault.refresh] failed", extra={"key": key, "err": str(e)})
+                        _logger.warning(
+                            "[vault.refresh] failed", extra={"key": key, "err": str(e)}
+                        )
             except Exception:
                 pass
 
@@ -176,5 +183,3 @@ class VaultClient:
 
 # Global instance
 vault_client = VaultClient()
-
-

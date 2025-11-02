@@ -39,24 +39,31 @@ class BaseConnector:
         return redis_cache.get_tenant_key(self.tenant_id, self._cursor_key())
 
     def set_cursor(self, value: str) -> None:
-        ttl = int(getattr(connectors_cfg, 'cursor_ttl_seconds', 7*24*3600))
+        ttl = int(getattr(connectors_cfg, "cursor_ttl_seconds", 7 * 24 * 3600))
         redis_cache.set_tenant_key(self.tenant_id, self._cursor_key(), value, ttl=ttl)
 
-    def list_updates(self, since: Optional[str]) -> Iterable[Dict[str, Any]]:  # noqa: D401 (interface)
+    def list_updates(
+        self, since: Optional[str]
+    ) -> Iterable[Dict[str, Any]]:  # noqa: D401 (interface)
         """Return iterable of update descriptors from source system."""
         raise NotImplementedError
 
-    def fetch_content(self, update: Dict[str, Any]) -> Dict[str, Any]:  # noqa: D401 (interface)
+    def fetch_content(
+        self, update: Dict[str, Any]
+    ) -> Dict[str, Any]:  # noqa: D401 (interface)
         """Fetch raw content for an update descriptor."""
         raise NotImplementedError
 
-    def normalize_record(self, raw: Dict[str, Any]) -> Optional[NormalizedRecord]:  # noqa: D401
+    def normalize_record(
+        self, raw: Dict[str, Any]
+    ) -> Optional[NormalizedRecord]:  # noqa: D401
         """Map raw content into NormalizedRecord."""
         raise NotImplementedError
 
     def ingest(self, records: List[NormalizedRecord]) -> int:
         from ai_core.services.document_service import DocumentService
         from shared.database.session import SessionLocal
+
         s = SessionLocal()
         try:
             ds = DocumentService(s)
@@ -83,7 +90,9 @@ class BaseConnector:
         except Exception as e:  # noqa: BLE001
             circuit_breaker.record_failure(f"connector_{name}", tenant)
             connector_metrics.inc_fail(name, tenant)
-            logging.getLogger(__name__).exception("[connector.list] error", extra={"tenant_id": tenant, "connector": name})
+            logging.getLogger(__name__).exception(
+                "[connector.list] error", extra={"tenant_id": tenant, "connector": name}
+            )
             return {"ok": False, "error": str(e)}
 
         records: List[NormalizedRecord] = []
@@ -98,7 +107,10 @@ class BaseConnector:
                 new_cursor = upd.get("cursor") or new_cursor
             except Exception as e:
                 connector_metrics.inc_fail(name, tenant)
-                logging.getLogger(__name__).exception("[connector.fetch_or_normalize] error", extra={"tenant_id": tenant, "connector": name})
+                logging.getLogger(__name__).exception(
+                    "[connector.fetch_or_normalize] error",
+                    extra={"tenant_id": tenant, "connector": name},
+                )
                 continue
 
         ingested = 0
@@ -109,5 +121,3 @@ class BaseConnector:
             self.set_cursor(new_cursor)
         connector_metrics.observe_duration(name, time.time() - t0)
         return {"ok": True, "updates": len(updates), "ingested": ingested}
-
-

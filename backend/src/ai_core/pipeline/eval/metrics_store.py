@@ -25,7 +25,9 @@ class MetricsStore:
         except Exception:
             pass
 
-    def write_report(self, report: Dict[str, Any], filename: str = "report.json") -> None:
+    def write_report(
+        self, report: Dict[str, Any], filename: str = "report.json"
+    ) -> None:
         try:
             out = os.path.join(self.dir, filename)
             with open(out, "w", encoding="utf-8") as f:
@@ -56,5 +58,3 @@ class MetricsStore:
             except Exception:
                 continue
         return sorted(list(dict.fromkeys(tenants)))
-
-

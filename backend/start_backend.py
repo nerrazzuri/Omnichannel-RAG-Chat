@@ -20,6 +20,7 @@ sys.path.insert(0, str(src_dir))
 
 from dotenv import load_dotenv
 
+
 def _load_env_and_log(env_path: Path) -> None:
     if env_path.exists():
         print(f"Loading environment from: {env_path}")
@@ -32,6 +33,7 @@ def _load_env_and_log(env_path: Path) -> None:
             print("⚠️  Warning: No API key found in environment!")
     else:
         print(f"⚠️  Warning: .env file not found at {env_path}")
+
 
 def _compose_cmd() -> list:
     """Return a docker compose command array, preferring 'docker compose'."""
@@ -52,21 +54,29 @@ def _run_compose(compose_args: list, cwd: Path) -> int:
     proc = subprocess.run(full_cmd, cwd=str(cwd))
     return proc.returncode
 
+
 def _get_container_id(service: str, cwd: Path) -> str:
     cmd = _compose_cmd()
     if not cmd:
         return ""
     try:
-        proc = subprocess.run(cmd + ["ps", "-q", service], cwd=str(cwd), capture_output=True, text=True)
+        proc = subprocess.run(
+            cmd + ["ps", "-q", service], cwd=str(cwd), capture_output=True, text=True
+        )
         cid = (proc.stdout or "").strip()
         return cid
     except Exception:
         return ""
 
-def _wait_for_postgres_healthy(service: str, cwd: Path, timeout_seconds: int = 90) -> bool:
+
+def _wait_for_postgres_healthy(
+    service: str, cwd: Path, timeout_seconds: int = 90
+) -> bool:
     cid = _get_container_id(service, cwd)
     if not cid:
-        print("⚠️  Could not determine Postgres container id; proceeding without health wait.")
+        print(
+            "⚠️  Could not determine Postgres container id; proceeding without health wait."
+        )
         return False
     cmd = ["docker", "inspect", "-f", "{{.State.Health.Status}}", cid]
     print("⏳ Waiting for Postgres to become healthy...")
@@ -84,15 +94,27 @@ def _wait_for_postgres_healthy(service: str, cwd: Path, timeout_seconds: int = 9
         except Exception:
             pass
         time.sleep(2)
-    print("⚠️  Postgres did not report healthy within timeout; backend may attempt to connect and retry.")
+    print(
+        "⚠️  Postgres did not report healthy within timeout; backend may attempt to connect and retry."
+    )
     return False
 
 
 def main():
     parser = argparse.ArgumentParser(description="Start AI Core backend service")
-    parser.add_argument("--up-postgres", action="store_true", help="Start Postgres via docker compose and set DATABASE_URL")
-    parser.add_argument("--docker-fullstack", action="store_true", help="Start full stack via docker compose and exit")
-    parser.add_argument("--reload", action="store_true", help="Enable uvicorn autoreload (dev only)")
+    parser.add_argument(
+        "--up-postgres",
+        action="store_true",
+        help="Start Postgres via docker compose and set DATABASE_URL",
+    )
+    parser.add_argument(
+        "--docker-fullstack",
+        action="store_true",
+        help="Start full stack via docker compose and exit",
+    )
+    parser.add_argument(
+        "--reload", action="store_true", help="Enable uvicorn autoreload (dev only)"
+    )
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -106,11 +128,16 @@ def main():
         if not compose_file.exists():
             print(f"❌ docker-compose.yml not found at {compose_file}")
             sys.exit(1)
-        rc = _run_compose(["-f", str(compose_file), "up", "-d", "postgresql"], cwd=repo_root)
+        rc = _run_compose(
+            ["-f", str(compose_file), "up", "-d", "postgresql"], cwd=repo_root
+        )
         if rc != 0:
             sys.exit(rc)
         # Point backend to the local Postgres started by compose
-        os.environ.setdefault("DATABASE_URL", "postgresql://chatbot_user:chatbot_password@localhost:5432/chatbot_dev")
+        os.environ.setdefault(
+            "DATABASE_URL",
+            "postgresql://chatbot_user:chatbot_password@localhost:5432/chatbot_dev",
+        )
         print(f"✅ DATABASE_URL set to: {os.environ['DATABASE_URL']}")
         # Wait for container health before starting app
         _wait_for_postgres_healthy("postgresql", repo_root, timeout_seconds=90)
@@ -121,7 +148,9 @@ def main():
             print(f"❌ docker-compose.yml not found at {compose_file}")
             sys.exit(1)
         # Detach so this script can exit cleanly
-        rc = _run_compose(["-f", str(compose_file), "up", "--build", "-d"], cwd=repo_root)
+        rc = _run_compose(
+            ["-f", str(compose_file), "up", "--build", "-d"], cwd=repo_root
+        )
         if rc == 0:
             print("\n🚀 Full stack started in Docker (detached). Services:")
             print("- Postgres: localhost:5432")
@@ -137,12 +166,14 @@ def main():
     print("=" * 50)
     return args
 
+
 # Now import and run the main app
 if __name__ == "__main__":
     # If invoked normally, run the CLI first and get args
     args = main()
     # Then start the local dev server
     import uvicorn
+
     uvicorn.run(
         "ai_core.main:app",
         host="0.0.0.0",

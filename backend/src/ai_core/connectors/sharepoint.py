@@ -44,5 +44,3 @@ class SharePointConnector(BaseConnector):
             classification="internal",
             metadata={"connector": self.name},
         )
-
-

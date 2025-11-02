@@ -52,5 +52,3 @@ PROMPTS: Dict[str, str] = {
     "instructional": INSTRUCT_PROMPT,
     "creative": CREATIVE_PROMPT,
 }
-
-

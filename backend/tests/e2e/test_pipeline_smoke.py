@@ -14,16 +14,24 @@ def setup_tenant(db: Session) -> str:
         db.add(Tenant(id=tid, name="Test", domain="test.local"))
         db.commit()
     kb = KnowledgeBase(tenant_id=tid, name="kb")
-    db.add(kb); db.commit(); db.refresh(kb)
+    db.add(kb)
+    db.commit()
+    db.refresh(kb)
     doc = Document(knowledge_base_id=kb.id, title="Doc", content="")
-    db.add(doc); db.commit(); db.refresh(doc)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
     chunk_texts = [
         "Chapter 1: Overview of project governance.",
         "Chapter 2: Risk management processes.",
         "Record 1: employee_name: Jane Doe\nsalary: 120000\ndepartment: Finance",
     ]
     for i, t in enumerate(chunk_texts):
-        db.add(KnowledgeChunk(document_id=doc.id, content=t, chunk_index=i, embedding=None, meta={}))
+        db.add(
+            KnowledgeChunk(
+                document_id=doc.id, content=t, chunk_index=i, embedding=None, meta={}
+            )
+        )
     db.commit()
     return str(tid)
 
@@ -35,12 +43,13 @@ def test_pipeline_smoke_bm25_only(monkeypatch):
         tenant_id = setup_tenant(db)
         # Monkeypatch dense retriever path to avoid external calls
         from ai_core.pipeline.retriever import dense_retriever as _dr
-        monkeypatch.setattr(_dr.DenseRetriever, "search_rich", lambda *args, **kwargs: [])
+
+        monkeypatch.setattr(
+            _dr.DenseRetriever, "search_rich", lambda *args, **kwargs: []
+        )
         pipe = RAGPipeline()
         out = pipe.answer("What is covered in chapter 1?", tenant_id=tenant_id, db=db)
         assert isinstance(out, dict)
         assert out.get("response")
     finally:
         db.close()
-
-

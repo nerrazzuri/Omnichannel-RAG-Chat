@@ -16,5 +16,3 @@ class DocumentUploadResponse(BaseModel):
     document_id: str = Field(alias="documentId")
     chunk_count: int = Field(alias="chunkCount")
     status: str
-
-

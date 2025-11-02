@@ -11,5 +11,3 @@ def test_hash_phone():
     r = Redactor(mode="hash")
     out = r.sanitize("Call +1-202-555-1234")
     assert "<PHONE:" in out
-
-

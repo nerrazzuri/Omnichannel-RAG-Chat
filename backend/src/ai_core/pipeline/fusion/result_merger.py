@@ -3,7 +3,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 class ResultMerger:
     def deduplicate_texts(self, texts: List[str], cap: int = 30) -> List[str]:
-        seen = set(); out: List[str] = []
+        seen = set()
+        out: List[str] = []
         for t in texts:
             k = (t or "")[:200].lower()
             if k in seen:
@@ -28,17 +29,19 @@ class ResultMerger:
 
         # Build secondary key map from hits
         tuple_keys: Dict[str, Tuple[str, Optional[int], Optional[str]]] = {}
-        for h in (dense_hits or []):
-            txt = (h.get("content") or "")
+        for h in dense_hits or []:
+            txt = h.get("content") or ""
             doc = h.get("document_id")
             tup = (str(doc), None, None)
             if txt:
                 tuple_keys[txt] = tup
-        for h in (field_value_hits or []):
-            txt = (h.get("content") or "")
+        for h in field_value_hits or []:
+            txt = h.get("content") or ""
             doc = h.get("document_id")
             ridx = h.get("row_index") if isinstance(h.get("row_index"), int) else None
-            fname = h.get("field_name") if isinstance(h.get("field_name"), str) else None
+            fname = (
+                h.get("field_name") if isinstance(h.get("field_name"), str) else None
+            )
             tup = (str(doc), ridx, fname)
             if txt:
                 tuple_keys[txt] = tup
@@ -57,5 +60,3 @@ class ResultMerger:
             if len(out) >= cap:
                 break
         return out
-
-

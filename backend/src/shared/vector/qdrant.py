@@ -1,21 +1,25 @@
 """
 Qdrant vector database service for document embeddings and similarity search.
 """
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
-import os
-import numpy as np
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 import logging
-import time
-import os
 from shared.config.settings import settings
-from shared.config.tuning import retrieval, qdrant_recovery, quant
+from shared.config.tuning import retrieval, quant
 from shared.utils.circuit_breaker import circuit_breaker
 from shared.utils.retry import retry_with_backoff
 from shared.metrics.reliability_metrics import reliability_metrics
 
 logger = logging.getLogger(__name__)
+
 
 class QdrantService:
     """Qdrant vector database service with tenant isolation."""
@@ -59,6 +63,7 @@ class QdrantService:
         @retry_with_backoff("qdrant.call")
         def _runner():
             return func(*args, **kwargs)
+
         try:
             if not circuit_breaker.allow("qdrant", tenant_id=None):
                 raise RuntimeError("circuit_open")
@@ -92,7 +97,9 @@ class QdrantService:
                 self._with_retries(
                     self.client.create_collection,
                     collection_name=self.collection_name,
-                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
+                    vectors_config=VectorParams(
+                        size=self.vector_size, distance=Distance.COSINE
+                    ),
                 )
                 logger.info(f"Created Qdrant collection: {self.collection_name}")
 
@@ -101,7 +108,7 @@ class QdrantService:
                     self.client.create_payload_index,
                     collection_name=self.collection_name,
                     field_name="tenant_id",
-                    field_schema="keyword"
+                    field_schema="keyword",
                 )
                 logger.info("Created tenant_id payload index")
                 # Create payload indices for chapter metadata to speed chapter queries
@@ -110,13 +117,13 @@ class QdrantService:
                         self.client.create_payload_index,
                         collection_name=self.collection_name,
                         field_name="chapter_num",
-                        field_schema="integer"
+                        field_schema="integer",
                     )
                     self._with_retries(
                         self.client.create_payload_index,
                         collection_name=self.collection_name,
                         field_name="chapter_title",
-                        field_schema="text"
+                        field_schema="text",
                     )
                     logger.info("Created chapter_num and chapter_title payload indices")
                 except Exception as ie:
@@ -126,7 +133,9 @@ class QdrantService:
 
         except Exception as e:
             # Degrade gracefully; caller may retry later
-            logger.warning(f"Failed to create Qdrant collection (will retry later): {e}")
+            logger.warning(
+                f"Failed to create Qdrant collection (will retry later): {e}"
+            )
             # Try a soft reconnect once
             try:
                 self.client = QdrantClient(url=self._url, api_key=self._api_key)
@@ -141,7 +150,9 @@ class QdrantService:
                 self._with_retries(
                     self.client.create_collection,
                     collection_name=self.schema_collection,
-                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
+                    vectors_config=VectorParams(
+                        size=self.vector_size, distance=Distance.COSINE
+                    ),
                 )
                 logger.info(f"Created Qdrant collection: {self.schema_collection}")
                 # Payload index for tenant filtering
@@ -149,7 +160,7 @@ class QdrantService:
                     self.client.create_payload_index,
                     collection_name=self.schema_collection,
                     field_name="tenant_id",
-                    field_schema="keyword"
+                    field_schema="keyword",
                 )
                 # Field name index for filtering/searching
                 try:
@@ -157,14 +168,16 @@ class QdrantService:
                         self.client.create_payload_index,
                         collection_name=self.schema_collection,
                         field_name="field_name",
-                        field_schema="keyword"
+                        field_schema="keyword",
                     )
                 except Exception:
                     pass
             else:
                 logger.info(f"Collection {self.schema_collection} already exists")
         except Exception as e:
-            logger.warning(f"Failed to create schema collection (will retry later): {e}")
+            logger.warning(
+                f"Failed to create schema collection (will retry later): {e}"
+            )
 
         # Ensure field_values collection exists
         try:
@@ -174,9 +187,13 @@ class QdrantService:
                 self._with_retries(
                     self.client.create_collection,
                     collection_name=self.field_values_collection,
-                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE)
+                    vectors_config=VectorParams(
+                        size=self.vector_size, distance=Distance.COSINE
+                    ),
                 )
-                logger.info(f"Created Qdrant collection: {self.field_values_collection}")
+                logger.info(
+                    f"Created Qdrant collection: {self.field_values_collection}"
+                )
                 # Payload indices for filtering
                 for fname, ftype in (
                     ("tenant_id", "keyword"),
@@ -188,16 +205,20 @@ class QdrantService:
                             self.client.create_payload_index,
                             collection_name=self.field_values_collection,
                             field_name=fname,
-                            field_schema=ftype
+                            field_schema=ftype,
                         )
                     except Exception:
                         pass
             else:
                 logger.info(f"Collection {self.field_values_collection} already exists")
         except Exception as e:
-            logger.warning(f"Failed to create field_values collection (will retry later): {e}")
+            logger.warning(
+                f"Failed to create field_values collection (will retry later): {e}"
+            )
 
-    def upsert_knowledge_chunks(self, tenant_id: str, chunks: List[Dict[str, Any]]) -> None:
+    def upsert_knowledge_chunks(
+        self, tenant_id: str, chunks: List[Dict[str, Any]]
+    ) -> None:
         """Upsert knowledge chunks for a specific tenant."""
         try:
             collection_name = self.collection_name
@@ -226,24 +247,28 @@ class QdrantService:
                         "chapter_title": chunk.get("chapter_title"),
                         "page": chunk.get("page"),
                         # retain any nested metadata
-                        "metadata": chunk.get("metadata", {})
-                    }
+                        "metadata": chunk.get("metadata", {}),
+                    },
                 )
                 points.append(point)
 
             if points:
                 self._with_retries(
-                    self.client.upsert,
-                    collection_name=collection_name,
-                    points=points
+                    self.client.upsert, collection_name=collection_name, points=points
                 )
-                logger.info(f"Upserted {len(points)} knowledge chunks for tenant {tenant_id}")
+                logger.info(
+                    f"Upserted {len(points)} knowledge chunks for tenant {tenant_id}"
+                )
 
         except Exception as e:
             # Degrade gracefully; embeddings remain available in SQL, upsert can be retried later
-            logger.warning(f"Failed to upsert knowledge chunks for tenant {tenant_id} (will retry later): {e}")
+            logger.warning(
+                f"Failed to upsert knowledge chunks for tenant {tenant_id} (will retry later): {e}"
+            )
 
-    def upsert_schema_fields(self, tenant_id: str, fields: List[Dict[str, Any]]) -> None:
+    def upsert_schema_fields(
+        self, tenant_id: str, fields: List[Dict[str, Any]]
+    ) -> None:
         """Upsert schema field embeddings for a tenant.
 
         Each item in fields should have: {"id": str, "embedding": List[float], "field_name": str, "description": str}
@@ -263,18 +288,22 @@ class QdrantService:
                         "aliases": f.get("aliases", []),
                         "category": f.get("category"),
                         "tokens": f.get("tokens", []),
-                    }
+                    },
                 )
                 points.append(point)
             if points:
                 self._with_retries(
                     self.client.upsert,
                     collection_name=self.schema_collection,
-                    points=points
+                    points=points,
                 )
-                logger.info(f"Upserted {len(points)} schema fields for tenant {tenant_id}")
+                logger.info(
+                    f"Upserted {len(points)} schema fields for tenant {tenant_id}"
+                )
         except Exception as e:
-            logger.warning(f"Failed to upsert schema fields for tenant {tenant_id}: {e}")
+            logger.warning(
+                f"Failed to upsert schema fields for tenant {tenant_id}: {e}"
+            )
 
     def search_schema_fields(
         self,
@@ -298,17 +327,23 @@ class QdrantService:
             )
             results = []
             for r in search_results:
-                results.append({
-                    "id": r.id,
-                    "score": r.score,
-                    "payload": r.payload,
-                })
+                results.append(
+                    {
+                        "id": r.id,
+                        "score": r.score,
+                        "payload": r.payload,
+                    }
+                )
             return results
         except Exception as e:
-            logger.warning(f"Failed to search schema fields for tenant {tenant_id}: {e}")
+            logger.warning(
+                f"Failed to search schema fields for tenant {tenant_id}: {e}"
+            )
             return []
 
-    def list_schema_fields(self, tenant_id: str, limit: int = 1000) -> List[Dict[str, Any]]:
+    def list_schema_fields(
+        self, tenant_id: str, limit: int = 1000
+    ) -> List[Dict[str, Any]]:
         """List schema field points for a tenant."""
         try:
             collected: List[Dict[str, Any]] = []
@@ -318,20 +353,28 @@ class QdrantService:
                 response = self._with_retries(
                     self.client.scroll,
                     collection_name=self.schema_collection,
-                    scroll_filter=Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]),
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="tenant_id", match=MatchValue(value=tenant_id)
+                            )
+                        ]
+                    ),
                     with_payload=True,
                     with_vectors=False,
                     limit=min(256, limit - fetched),
-                    offset=next_page
+                    offset=next_page,
                 )
                 if not response or not response[0]:
                     break
                 points, next_page = response
                 for p in points:
-                    collected.append({
-                        "id": p.id,
-                        "payload": p.payload or {},
-                    })
+                    collected.append(
+                        {
+                            "id": p.id,
+                            "payload": p.payload or {},
+                        }
+                    )
                 fetched += len(points)
                 if not next_page:
                     break
@@ -346,10 +389,11 @@ class QdrantService:
             return True
         try:
             from qdrant_client.models import HasIdCondition
+
             self._with_retries(
                 self.client.delete,
                 collection_name=self.schema_collection,
-                points_selector=HasIdCondition(has_id=ids)
+                points_selector=HasIdCondition(has_id=ids),
             )
             logger.info(f"Deleted {len(ids)} schema fields for tenant {tenant_id}")
             return True
@@ -380,16 +424,18 @@ class QdrantService:
                         "source_file": it.get("source_file"),
                         "record_sig": it.get("record_sig"),
                         "kind": "field_value",
-                    }
+                    },
                 )
                 points.append(point)
             if points:
                 self._with_retries(
                     self.client.upsert,
                     collection_name=self.field_values_collection,
-                    points=points
+                    points=points,
                 )
-                logger.info(f"Upserted {len(points)} field_values for tenant {tenant_id}")
+                logger.info(
+                    f"Upserted {len(points)} field_values for tenant {tenant_id}"
+                )
         except Exception as e:
             logger.warning(f"Failed to upsert field_values for tenant {tenant_id}: {e}")
 
@@ -401,7 +447,11 @@ class QdrantService:
     ) -> List[Dict[str, Any]]:
         """Search field_values collection for a tenant."""
         try:
-            filter_condition = Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))])
+            filter_condition = Filter(
+                must=[
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
+                ]
+            )
             res = self._with_retries(
                 self.client.search,
                 collection_name=self.field_values_collection,
@@ -411,23 +461,31 @@ class QdrantService:
             )
             out: List[Dict[str, Any]] = []
             for r in res:
-                out.append({
-                    "id": r.id,
-                    "score": r.score,
-                    "payload": r.payload,
-                })
+                out.append(
+                    {
+                        "id": r.id,
+                        "score": r.score,
+                        "payload": r.payload,
+                    }
+                )
             return out
         except Exception as e:
             logger.warning(f"search_field_values failed: {e}")
             return []
 
-    def delete_field_values_for_document(self, tenant_id: str, document_id: str) -> bool:
+    def delete_field_values_for_document(
+        self, tenant_id: str, document_id: str
+    ) -> bool:
         """Delete field_values for a document in a tenant."""
         try:
-            flt = Filter(must=[
-                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
-                FieldCondition(key="document_id", match=MatchValue(value=document_id)),
-            ])
+            flt = Filter(
+                must=[
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                    FieldCondition(
+                        key="document_id", match=MatchValue(value=document_id)
+                    ),
+                ]
+            )
             self._with_retries(
                 self.client.delete,
                 collection_name=self.field_values_collection,
@@ -443,17 +501,14 @@ class QdrantService:
         query_embedding: List[float],
         tenant_id: str,
         top_k: int = 5,
-        threshold: float = 0.7
+        threshold: float = 0.7,
     ) -> List[Dict[str, Any]]:
         """Search for similar knowledge chunks within a tenant."""
         try:
             # Create filter for tenant isolation
             filter_condition = Filter(
                 must=[
-                    FieldCondition(
-                        key="tenant_id",
-                        match=MatchValue(value=tenant_id)
-                    )
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
                 ]
             )
 
@@ -465,17 +520,15 @@ class QdrantService:
                 query_vector=query_embedding,
                 query_filter=filter_condition,
                 limit=top_k,
-                score_threshold=threshold
+                score_threshold=threshold,
             )
 
             # Format results
             results = []
             for result in search_results:
-                results.append({
-                    "id": result.id,
-                    "score": result.score,
-                    "payload": result.payload
-                })
+                results.append(
+                    {"id": result.id, "score": result.score, "payload": result.payload}
+                )
 
             logger.info(f"Found {len(results)} similar chunks for tenant {tenant_id}")
             return results
@@ -489,10 +542,7 @@ class QdrantService:
         try:
             filter_condition = Filter(
                 must=[
-                    FieldCondition(
-                        key="tenant_id",
-                        match=MatchValue(value=tenant_id)
-                    )
+                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
                 ]
             )
 
@@ -500,7 +550,7 @@ class QdrantService:
             self._with_retries(
                 self.client.delete,
                 collection_name=collection_name,
-                points_selector=filter_condition
+                points_selector=filter_condition,
             )
 
             logger.info(f"Deleted all knowledge chunks for tenant {tenant_id}")
@@ -513,17 +563,21 @@ class QdrantService:
     def get_collection_info(self) -> Dict[str, Any]:
         """Get information about the knowledge chunks collection."""
         try:
-            collection_info = self._with_retries(self.client.get_collection, self.collection_name)
+            collection_info = self._with_retries(
+                self.client.get_collection, self.collection_name
+            )
             return {
                 "name": collection_info.name,
                 "vectors_count": collection_info.points_count,
-                "status": "active"
+                "status": "active",
             }
         except Exception as e:
             logger.error(f"Failed to get collection info: {e}")
             return {"status": "error", "error": str(e)}
 
-    def get_adjacent_chunks(self, tenant_id: str, document_id: str, start_index: int, window: int = 2) -> List[Dict[str, Any]]:
+    def get_adjacent_chunks(
+        self, tenant_id: str, document_id: str, start_index: int, window: int = 2
+    ) -> List[Dict[str, Any]]:
         """Fetch neighbor chunks around a given chunk index for stitching.
 
         Note: Qdrant doesn't support range by chunk_index directly; we scroll and filter in client for simplicity.
@@ -533,10 +587,16 @@ class QdrantService:
             res = self._with_retries(
                 self.client.scroll,
                 collection_name=collection_name,
-                scroll_filter=Filter(must=[
-                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
-                    FieldCondition(key="document_id", match=MatchValue(value=document_id)),
-                ]),
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="tenant_id", match=MatchValue(value=tenant_id)
+                        ),
+                        FieldCondition(
+                            key="document_id", match=MatchValue(value=document_id)
+                        ),
+                    ]
+                ),
                 with_payload=True,
                 with_vectors=False,
                 limit=512,
@@ -564,7 +624,8 @@ class QdrantService:
         Uses scroll to page through limited results. Best-effort; returns empty on error.
         """
         try:
-            from qdrant_client.models import Filter, FieldCondition, HasIdCondition
+            from qdrant_client.models import Filter, FieldCondition
+
             collected: List[Dict[str, Any]] = []
             next_page = None
             fetched = 0
@@ -572,11 +633,17 @@ class QdrantService:
                 response = self._with_retries(
                     self.client.scroll,
                     collection_name=self.collection_name,
-                    scroll_filter=Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]),
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="tenant_id", match=MatchValue(value=tenant_id)
+                            )
+                        ]
+                    ),
                     with_payload=True,
                     with_vectors=False,
                     limit=min(256, limit - fetched),
-                    offset=next_page
+                    offset=next_page,
                 )
                 if not response or not response[0]:
                     break
@@ -592,6 +659,7 @@ class QdrantService:
         except Exception as e:
             logger.warning(f"list_chapters failed: {e}")
             return []
+
 
 # Global vector service instance (configured via environment settings)
 qdrant_service = QdrantService()

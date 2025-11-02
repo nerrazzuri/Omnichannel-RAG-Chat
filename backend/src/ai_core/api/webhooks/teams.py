@@ -1,7 +1,7 @@
 """
 Microsoft Teams webhook handler.
 """
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException
 from typing import Dict, Any
 from shared.services.session_service import SessionService
 from shared.utils.channel_adapter import ChannelAdapter
@@ -22,5 +22,3 @@ async def teams_webhook(request: Request) -> Dict[str, Any]:
     session_id = session_service.get_or_create_session(tenant_id, user_identifier)
     session_service.set_channel_mapping(tenant_id, session_id, "teams", user_identifier)
     return {"status": "accepted", "sessionId": session_id}
-
-

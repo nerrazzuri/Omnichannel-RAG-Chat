@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Protocol
+from typing import Dict, Any, List, Protocol
 
 
 @dataclass
@@ -30,5 +30,3 @@ class BaseAgent:
 
     def tools(self) -> Dict[str, Action]:
         return {}
-
-

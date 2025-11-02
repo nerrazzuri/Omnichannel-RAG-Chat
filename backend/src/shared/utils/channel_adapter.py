@@ -19,5 +19,3 @@ class ChannelAdapter:
         if c == "telegram":
             return str(payload.get("message", {}).get("from", {}).get("id", ""))
         return ""
-
-

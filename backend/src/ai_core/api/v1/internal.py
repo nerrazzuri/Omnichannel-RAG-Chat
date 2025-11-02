@@ -1,7 +1,7 @@
 """
 Internal knowledge API with JWT-based RBAC.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any, List
 from shared.database.session import get_db
@@ -22,7 +22,9 @@ def parse_bearer(auth: Optional[str]) -> str:
 
 
 @router.get("/knowledge/list")
-def list_knowledge(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+def list_knowledge(
+    authorization: Optional[str] = Header(None), db: Session = Depends(get_db)
+) -> List[Dict[str, Any]]:
     token = parse_bearer(authorization)
     payload = jwt_service.verify_token(token)
     if not payload:
@@ -37,7 +39,9 @@ def list_knowledge(authorization: Optional[str] = Header(None), db: Session = De
 
 @router.post("/knowledge/update")
 def update_knowledge(
-    body: Dict[str, Any], authorization: Optional[str] = Header(None), db: Session = Depends(get_db)
+    body: Dict[str, Any],
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     token = parse_bearer(authorization)
     payload = jwt_service.verify_token(token)
@@ -55,5 +59,3 @@ def update_knowledge(
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-

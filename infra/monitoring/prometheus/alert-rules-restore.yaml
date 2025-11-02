@@ -1,0 +1,25 @@
+groups:
+  - name: restore-drill
+    rules:
+      - alert: RestoreDrillFailure
+        expr: increase(restore_drill_success_total[30d]) < 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No successful restore drills in last 30 days"
+      - alert: RestoreRTOViolation
+        expr: restore_rto_compliance == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restore RTO non-compliant"
+      - alert: RestoreRPOViolation
+        expr: restore_rpo_compliance == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restore RPO non-compliant"
+

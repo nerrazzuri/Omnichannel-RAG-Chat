@@ -31,5 +31,3 @@ def test_circuit_breaker_open_and_close():
     # success closes
     circuit_breaker.record_success(svc, tenant)
     assert circuit_breaker.state(svc, tenant) == circuit_breaker.CLOSED
-
-

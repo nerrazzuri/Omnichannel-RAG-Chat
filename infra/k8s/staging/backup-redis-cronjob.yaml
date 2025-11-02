@@ -11,20 +11,36 @@ spec:
       backoffLimit: 1
       template:
         spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
           restartPolicy: OnFailure
           containers:
             - name: redis-backup
-              image: redis:7
+              image: amazon/aws-cli:2.15.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               command: ["/bin/bash", "-lc"]
               args:
                 - |
                   set -euo pipefail
-                  TS=$(date +%s)
-                  redis-cli -h redis BGSAVE
-                  # wait for RDB to complete (simple wait)
-                  sleep 20
-                  SIZE=0
-                  curl -s -X POST http://ai-core:8000/v1/admin/backup/mark \
-                    -H 'Content-Type: application/json' \
-                    -d "{\"system\":\"redis\",\"status\":\"success\",\"duration_ms\":0,\"size_bytes\":$SIZE,\"ts_unix\":$TS}" || true
+                  /bin/bash /scripts/redis_backup.sh
+              volumeMounts:
+                - name: backup-scripts
+                  mountPath: /scripts
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "300m"
+                  memory: "256Mi"
+          volumes:
+            - name: backup-scripts
+              configMap:
+                name: backup-scripts
 

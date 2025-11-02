@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 from .bm25_retriever import BM25Retriever
 from .dense_retriever import DenseRetriever
@@ -30,7 +30,14 @@ class RetrieverManager:
 
         if db is not None:
             # Build BM25 corpus and rank
-            corpus_texts, idx_to_id, id_to_content, content_to_row, sig_to_id, text_to_docmeta = self.bm25.build_corpus(db, tenant_id)
+            (
+                corpus_texts,
+                idx_to_id,
+                id_to_content,
+                content_to_row,
+                sig_to_id,
+                text_to_docmeta,
+            ) = self.bm25.build_corpus(db, tenant_id)
             if corpus_texts:
                 ranked = self.bm25.rank_texts(query, corpus_texts, top_k=30)
                 ordered_texts = []
@@ -56,7 +63,9 @@ class RetrieverManager:
         if dense_hits:
             self._cache.set(tenant_id, "dense_hits", query, dense_hits, ttl=300)
         if field_value_hits:
-            self._cache.set(tenant_id, "field_value_hits", query, field_value_hits, ttl=300)
+            self._cache.set(
+                tenant_id, "field_value_hits", query, field_value_hits, ttl=300
+            )
 
         return {
             "bm25_texts": bm25_texts,
@@ -65,5 +74,3 @@ class RetrieverManager:
             "content_to_row": content_to_row,
             "text_to_docmeta": text_to_docmeta,
         }
-
-

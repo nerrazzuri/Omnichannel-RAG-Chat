@@ -2,7 +2,7 @@
 FastAPI application for Gateway - Multi-channel webhook and authentication layer.
 Restored with functional rate limiting, structured logging, and settings integration.
 """
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
@@ -129,7 +129,9 @@ app.add_middleware(
 
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=["*"] if settings.debug else ["api.company.com", "gateway.company.com"],
+    allowed_hosts=["*"]
+    if settings.debug
+    else ["api.company.com", "gateway.company.com"],
 )
 
 
@@ -147,7 +149,9 @@ async def log_requests(request: Request, call_next):
     except Exception as e:
         app.state.metrics["errors_total"] += 1
         duration = time.time() - start
-        logger.error(f"{request.method} {request.url.path} error: {e} in {duration:.3f}s")
+        logger.error(
+            f"{request.method} {request.url.path} error: {e} in {duration:.3f}s"
+        )
         raise
 
 

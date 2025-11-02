@@ -19,5 +19,3 @@ class AgentRegistry:
 
 
 registry = AgentRegistry()
-
-

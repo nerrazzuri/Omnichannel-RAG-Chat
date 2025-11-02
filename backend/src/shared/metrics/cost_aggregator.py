@@ -4,7 +4,6 @@ from typing import Dict, Tuple
 import threading
 import time
 
-from shared.config.tuning import cost as cost_cfg
 
 
 class RollingCostAggregator:
@@ -13,7 +12,9 @@ class RollingCostAggregator:
         # (tenant, model, kind) -> (tokens_in, tokens_out, usd, last_ts)
         self._buckets: Dict[Tuple[str, str, str], Tuple[int, int, float, float]] = {}
 
-    def add(self, tenant: str, model: str, kind: str, tin: int, tout: int, usd: float) -> None:
+    def add(
+        self, tenant: str, model: str, kind: str, tin: int, tout: int, usd: float
+    ) -> None:
         now = time.time()
         k = (tenant, model, kind)
         with self._lock:
@@ -30,5 +31,3 @@ class RollingCostAggregator:
 
 
 rolling_cost = RollingCostAggregator()
-
-

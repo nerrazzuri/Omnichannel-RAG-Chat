@@ -47,5 +47,3 @@ def has_permission(role: str, permission: Permission) -> bool:
     except Exception:
         return False
     return permission in ROLE_PERMISSIONS.get(r, set())
-
-

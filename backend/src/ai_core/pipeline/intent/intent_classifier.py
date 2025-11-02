@@ -1,4 +1,4 @@
-from typing import Literal, Dict, Any
+from typing import Literal, Dict
 
 import os
 from openai import OpenAI
@@ -25,6 +25,7 @@ class IntentClassifier:
 
         # Rule-based quick checks (order matters). Match summary before aggregate to avoid 'sum' in 'summary'.
         import re
+
         if re.search(r"\b(summarize|summary|overview|explain|describe)\b", q):
             return "summary"
         if re.search(r"\b(compare|versus|vs|difference\s+between|contrast)\b", q):
@@ -41,15 +42,16 @@ class IntentClassifier:
             resp = self.client.embeddings.create(model=model, input=texts)
             vecs = [d.embedding for d in resp.data]
             import numpy as _np
+
             qv = _np.array(vecs[0])
             sims = {}
             idx = 1
             for intent, _desc in self.anchors.items():
                 av = _np.array(vecs[idx])
                 idx += 1
-                sims[intent] = float(qv @ av) / (float(_np.linalg.norm(qv)) * float(_np.linalg.norm(av)) + 1e-9)
+                sims[intent] = float(qv @ av) / (
+                    float(_np.linalg.norm(qv)) * float(_np.linalg.norm(av)) + 1e-9
+                )
             return max(sims, key=sims.get) if sims else "lookup"
         except Exception:
             return "lookup"
-
-

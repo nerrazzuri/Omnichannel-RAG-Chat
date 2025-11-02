@@ -17,5 +17,3 @@ def normalize_multiline_text(text: str) -> str:
     # Collapse long runs of spaces (but keep single spaces)
     s = re.sub(r" {2,}", " ", s)
     return s
-
-

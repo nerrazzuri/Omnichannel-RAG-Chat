@@ -26,7 +26,16 @@ class HybridContextualRouter:
         self.default_catalog: Dict[str, List[str]] = {
             "lookup": ["what is", "who is", "find", "lookup"],
             "summary": ["summarize", "summary", "overview", "explain", "describe"],
-            "aggregate": ["how many", "count", "total", "average", "sum", "mean", "median", "group by"],
+            "aggregate": [
+                "how many",
+                "count",
+                "total",
+                "average",
+                "sum",
+                "mean",
+                "median",
+                "group by",
+            ],
             "compare": ["compare", "versus", "vs", "difference between", "contrast"],
             "forecast": ["forecast", "predict", "projection", "estimate future"],
         }
@@ -36,6 +45,7 @@ class HybridContextualRouter:
         self.intent_model_weight = float(os.getenv("INTENT_MODEL_WEIGHT", "0.35"))
         try:
             from ai_core.pipeline.embedding.embedding_service import EmbeddingService
+
             self._emb = EmbeddingService()
         except Exception:
             self._emb = None
@@ -54,13 +64,16 @@ class HybridContextualRouter:
                 return intent
             # Fallback to LLM classification prompt via shared LLM client
             from ai_core.pipeline.llm.llm_client import LLMClient
+
             llm = LLMClient()
             prompt = (
                 "Classify the user query into exactly one of these intents: "
                 "lookup, summary, compare, aggregate, forecast.\n"
                 "Respond with ONLY the label, no extra text."
             )
-            out = llm.generate(query=prompt, contexts=[q], intent="summary", result_hint=None)
+            out = llm.generate(
+                query=prompt, contexts=[q], intent="summary", result_hint=None
+            )
             text = (out.get("text") or out.get("response") or "").strip().lower()
             label = text.split()[0] if text else ""
             mapped = self._map_label(label)
@@ -68,7 +81,9 @@ class HybridContextualRouter:
         except Exception:
             # Last resort: embedding proxy
             try:
-                intent, _ = self._embedding_signal(q, self._load_tenant_catalog("default"))
+                intent, _ = self._embedding_signal(
+                    q, self._load_tenant_catalog("default")
+                )
                 return intent
             except Exception:
                 return None
@@ -87,7 +102,13 @@ class HybridContextualRouter:
         # Signals
         rule_intent, rule_score = self._rule_signal(q, catalog)
         emb_intent, emb_score = self._embedding_signal(q, catalog)
-        ctx_intent, ctx_score, ctx_trigger, ctx_match, prev_intent = self._context_signal(q, conversation_context)
+        (
+            ctx_intent,
+            ctx_score,
+            ctx_trigger,
+            ctx_match,
+            prev_intent,
+        ) = self._context_signal(q, conversation_context)
         # model decided conditionally later
         model_intent, model_score, model_reason = None, 0.0, None
 
@@ -99,10 +120,12 @@ class HybridContextualRouter:
             "model": self.intent_model_weight,
         }
         candidates: Dict[str, float] = {}
+
         def acc(k: Optional[str], s: float, w: float):
             if not k:
                 return
             candidates[k] = candidates.get(k, 0.0) + max(0.0, s) * w
+
         # If a continuation trigger exists and rule suggests a different explicit intent, the rule overrides inheritance
         acc(rule_intent, rule_score, weights["rule"])
         acc(emb_intent, emb_score, weights["emb"])
@@ -116,7 +139,9 @@ class HybridContextualRouter:
         # preliminary combined confidence
         prelim_conf = max(candidates.values()) if candidates else 0.0
         if prelim_conf < self.intent_conf_threshold:
-            model_intent, model_score, model_reason = self._model_signal_conditional(q, tenant_id, prev_intent)
+            model_intent, model_score, model_reason = self._model_signal_conditional(
+                q, tenant_id, prev_intent
+            )
             acc(model_intent, model_score, weights["model"])
         if not candidates:
             final_intent, final_conf = "lookup", 0.35
@@ -135,26 +160,41 @@ class HybridContextualRouter:
             confidence=float(min(1.0, max(0.0, final_conf))),
             source=self._best_source(rule_score, emb_score, ctx_score, model_score),
             contextual_trigger=bool(ctx_trigger),
-            tenant_overrides_used=bool(self._tenant_cache.get(tenant_id, {}).get("overrides", False)),
+            tenant_overrides_used=bool(
+                self._tenant_cache.get(tenant_id, {}).get("overrides", False)
+            ),
             details={
                 "rule": {"intent": rule_intent, "score": rule_score},
                 "embedding": {"intent": emb_intent, "score": emb_score},
-                "context": {"intent": ctx_intent, "score": boosted_ctx, "match": ctx_match, "prev_intent": prev_intent, "trigger": ctx_trigger},
-                "model": {"intent": model_intent, "score": model_score, "reason": model_reason},
+                "context": {
+                    "intent": ctx_intent,
+                    "score": boosted_ctx,
+                    "match": ctx_match,
+                    "prev_intent": prev_intent,
+                    "trigger": ctx_trigger,
+                },
+                "model": {
+                    "intent": model_intent,
+                    "score": model_score,
+                    "reason": model_reason,
+                },
             },
         )
         # Structured diagnostics logging
         try:
             from shared.logging.pipeline_logger import PipelineLogger
-            PipelineLogger(tenant_id).emit({
-                "router": {
-                    "previous_intent": prev_intent,
-                    "context_match_score": ctx_match,
-                    "continuation_trigger_detected": bool(ctx_trigger),
-                    "final_intent": final_intent,
-                    "confidence": decision.confidence,
+
+            PipelineLogger(tenant_id).emit(
+                {
+                    "router": {
+                        "previous_intent": prev_intent,
+                        "context_match_score": ctx_match,
+                        "continuation_trigger_detected": bool(ctx_trigger),
+                        "final_intent": final_intent,
+                        "confidence": decision.confidence,
+                    }
                 }
-            })
+            )
         except Exception:
             pass
         # Persist last decision to tenant cache for quick context similarity checks
@@ -162,13 +202,16 @@ class HybridContextualRouter:
         # Emit intent confidence metric
         try:
             from shared.metrics.quality_metrics import quality_metrics
+
             quality_metrics.set_intent_conf(tenant_id, decision.confidence)
         except Exception:
             pass
         return decision
 
     # ---------- Signals ----------
-    def _rule_signal(self, q: str, catalog: Dict[str, List[str]]) -> Tuple[Optional[str], float]:
+    def _rule_signal(
+        self, q: str, catalog: Dict[str, List[str]]
+    ) -> Tuple[Optional[str], float]:
         ql = q.lower()
         for intent, phrases in catalog.items():
             for p in phrases:
@@ -176,7 +219,9 @@ class HybridContextualRouter:
                     return intent, 1.0
         return None, 0.0
 
-    def _embedding_signal(self, q: str, catalog: Dict[str, List[str]]) -> Tuple[Optional[str], float]:
+    def _embedding_signal(
+        self, q: str, catalog: Dict[str, List[str]]
+    ) -> Tuple[Optional[str], float]:
         if not self._emb:
             return None, 0.0
         intents = list(catalog.keys())
@@ -197,7 +242,9 @@ class HybridContextualRouter:
         except Exception:
             return None, 0.0
 
-    def _context_signal(self, q: str, recent: Optional[List[Dict[str, Any]]]) -> Tuple[Optional[str], float, bool, Optional[float], Optional[str]]:
+    def _context_signal(
+        self, q: str, recent: Optional[List[Dict[str, Any]]]
+    ) -> Tuple[Optional[str], float, bool, Optional[float], Optional[str]]:
         if not recent:
             return None, 0.0, False, None, None
         ql = q.lower()
@@ -225,7 +272,9 @@ class HybridContextualRouter:
         match_score = None
         try:
             if self._emb:
-                prev_texts = [str(m.get("content", "")) for m in recent[:3] if isinstance(m, dict)]
+                prev_texts = [
+                    str(m.get("content", "")) for m in recent[:3] if isinstance(m, dict)
+                ]
                 joined = " \n".join(prev_texts)
                 qv = self._emb.embed_query(q, "default")
                 pv = self._emb.embed_query(joined, "default")
@@ -243,7 +292,9 @@ class HybridContextualRouter:
             return None, 0.0, False, match_score, prev_intent
         return inherited, base, True, match_score, prev_intent
 
-    def _model_signal_conditional(self, q: str, tenant_id: str, prev_intent: Optional[str]) -> Tuple[Optional[str], float, Optional[str]]:
+    def _model_signal_conditional(
+        self, q: str, tenant_id: str, prev_intent: Optional[str]
+    ) -> Tuple[Optional[str], float, Optional[str]]:
         if os.getenv("USE_INTENT_MODEL", "false").lower() not in ("1", "true", "yes"):
             return None, 0.0, None
         key = f"{tenant_id}::{q.strip().lower()}"
@@ -252,6 +303,7 @@ class HybridContextualRouter:
             return intent, float(conf), None
         context = {"tenant_id": tenant_id, "prev_intent": prev_intent}
         import time as _t
+
         t0 = _t.time()
         label, conf, reason = None, 0.0, None
         err = None
@@ -264,16 +316,19 @@ class HybridContextualRouter:
         latency = int((_t.time() - t0) * 1000)
         try:
             from shared.logging.pipeline_logger import PipelineLogger
-            PipelineLogger(tenant_id).emit({
-                "router_model": {
-                    "invoked": True,
-                    "provider": self.intent_model_provider,
-                    "confidence": conf,
-                    "latency_ms": latency,
-                    "error": str(err) if err else None,
-                    "label": label,
+
+            PipelineLogger(tenant_id).emit(
+                {
+                    "router_model": {
+                        "invoked": True,
+                        "provider": self.intent_model_provider,
+                        "confidence": conf,
+                        "latency_ms": latency,
+                        "error": str(err) if err else None,
+                        "label": label,
+                    }
                 }
-            })
+            )
         except Exception:
             pass
         mapped = self._map_label(label)
@@ -282,11 +337,14 @@ class HybridContextualRouter:
         self._model_cache[key] = (mapped, float(conf))
         return mapped, float(conf), reason
 
-    def predict_intent_via_model(self, query: str, context: Dict[str, Any]) -> Tuple[Optional[str], float, Optional[str]]:
+    def predict_intent_via_model(
+        self, query: str, context: Dict[str, Any]
+    ) -> Tuple[Optional[str], float, Optional[str]]:
         provider = (self.intent_model_provider or "remote").lower()
         if provider == "remote":
             try:
                 from openai import OpenAI
+
                 api_key = os.getenv("OPENAI_API_KEY")
                 client = OpenAI(api_key=api_key) if api_key else None
                 if not client:
@@ -305,15 +363,24 @@ class HybridContextualRouter:
                 )
                 text = (resp.choices[0].message.content or "").strip()
                 import json as _json
-                data = _json.loads(text) if text.startswith("{") else {"intent": text.strip().lower(), "confidence": 0.6}
+
+                data = (
+                    _json.loads(text)
+                    if text.startswith("{")
+                    else {"intent": text.strip().lower(), "confidence": 0.6}
+                )
                 return data.get("intent"), float(data.get("confidence", 0.6)), None
             except Exception:
                 return self._local_model_stub(query, context)
         else:
             return self._local_model_stub(query, context)
 
-    def _local_model_stub(self, query: str, context: Dict[str, Any]) -> Tuple[Optional[str], float, Optional[str]]:
-        intent, score = self._embedding_signal(query, self._load_tenant_catalog(context.get("tenant_id", "default")))
+    def _local_model_stub(
+        self, query: str, context: Dict[str, Any]
+    ) -> Tuple[Optional[str], float, Optional[str]]:
+        intent, score = self._embedding_signal(
+            query, self._load_tenant_catalog(context.get("tenant_id", "default"))
+        )
         return intent, float(score), "embedding-proxy"
 
     @staticmethod
@@ -334,14 +401,22 @@ class HybridContextualRouter:
 
     # ---------- Utilities ----------
     @staticmethod
-    def _best_source(rule_score: float, emb_score: float, ctx_score: float, model_score: float) -> str:
+    def _best_source(
+        rule_score: float, emb_score: float, ctx_score: float, model_score: float
+    ) -> str:
         try:
-            pairs = [("rule", float(rule_score or 0.0)), ("embedding", float(emb_score or 0.0)), ("context", float(ctx_score or 0.0)), ("model", float(model_score or 0.0))]
+            pairs = [
+                ("rule", float(rule_score or 0.0)),
+                ("embedding", float(emb_score or 0.0)),
+                ("context", float(ctx_score or 0.0)),
+                ("model", float(model_score or 0.0)),
+            ]
             best = max(pairs, key=lambda x: x[1])
             # If all zero, return "rule" as default
             return best[0] if best[1] > 0.0 else "rule"
         except Exception:
             return "rule"
+
     def _load_tenant_catalog(self, tenant_id: str) -> Dict[str, List[str]]:
         # For now, load from default; could read DB/JSON in future
         cached = self._tenant_cache.get(tenant_id)
@@ -356,10 +431,10 @@ class HybridContextualRouter:
     def _cos(a: List[float], b: List[float]) -> float:
         if not a or not b:
             return 0.0
-        num = sum(x*y for x, y in zip(a, b))
-        da = math.sqrt(sum(x*x for x in a)) or 1.0
-        db = math.sqrt(sum(y*y for y in b)) or 1.0
-        return num / (da*db)
+        num = sum(x * y for x, y in zip(a, b))
+        da = math.sqrt(sum(x * x for x in a)) or 1.0
+        db = math.sqrt(sum(y * y for y in b)) or 1.0
+        return num / (da * db)
 
     @staticmethod
     def _jaccard(a: str, b: str) -> float:

@@ -16,6 +16,7 @@ class StructuredExecutor:
         self._duck = None
         try:
             import duckdb as _duckdb  # type: ignore
+
             self._duck = _duckdb
         except Exception:
             self._duck = None
@@ -26,6 +27,7 @@ class StructuredExecutor:
         self._col_list: Dict[str, List[str]] = {}
         try:
             from shared.metrics.retrieval_metrics import retrieval_metrics
+
             self._ret_metrics = retrieval_metrics
         except Exception:
             self._ret_metrics = None
@@ -33,7 +35,13 @@ class StructuredExecutor:
     # ------------------------------
     # Public API
     # ------------------------------
-    def execute(self, query: str, dataframe, schema_info: Dict[str, Any], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def execute(
+        self,
+        query: str,
+        dataframe,
+        schema_info: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
         try:
             parsed = self._parse_nl(query)
             if not parsed:
@@ -42,12 +50,18 @@ class StructuredExecutor:
             synmap = self._get_or_build_synonyms(schema_info, context)
             # Build SQL (or pandas fallback)
             if self._duck is not None:
-                result = self._run_duckdb(dataframe, parsed, schema_info, synmap, context)
+                result = self._run_duckdb(
+                    dataframe, parsed, schema_info, synmap, context
+                )
             else:
-                result = self._run_pandas(dataframe, parsed, schema_info, synmap, context)
+                result = self._run_pandas(
+                    dataframe, parsed, schema_info, synmap, context
+                )
             return result
         except Exception as e:
-            self.log.exception("[structured.execute] failed", extra={"module_name": __name__})
+            self.log.exception(
+                "[structured.execute] failed", extra={"module_name": __name__}
+            )
             return None
 
     # ------------------------------
@@ -100,7 +114,9 @@ class StructuredExecutor:
     # ------------------------------
     # Synonyms (local)
     # ------------------------------
-    def _get_or_build_synonyms(self, schema_info: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, List[float]]:
+    def _get_or_build_synonyms(
+        self, schema_info: Dict[str, Any], context: Dict[str, Any]
+    ) -> Dict[str, List[float]]:
         tenant = str(context.get("tenant_id", "default"))
         if tenant in self._syn_cache:
             return self._syn_cache[tenant]
@@ -109,10 +125,13 @@ class StructuredExecutor:
         # Build embedding vectors per column using retrieval embedding model
         try:
             from ai_core.pipeline.embedding.embedding_service import EmbeddingService
+
             emb = EmbeddingService()
             vecs = emb._embed_with_cache(cols, tenant)  # type: ignore[arg-type]
         except Exception as e:
-            self.log.exception("[structured.synonyms] embed error", extra={"tenant_id": tenant})
+            self.log.exception(
+                "[structured.synonyms] embed error", extra={"tenant_id": tenant}
+            )
             vecs = [[0.0] * 16 for _ in cols]
         syns: Dict[str, List[float]] = {}
         for c, v in zip(cols, vecs):
@@ -135,7 +154,9 @@ class StructuredExecutor:
     # ------------------------------
     # Execution backends
     # ------------------------------
-    def _resolve_col(self, name: str, schema_info: Dict[str, Any], synmap: Dict[str, List[float]]) -> Optional[str]:
+    def _resolve_col(
+        self, name: str, schema_info: Dict[str, Any], synmap: Dict[str, List[float]]
+    ) -> Optional[str]:
         cand = name.strip().lower()
         cols: List[str] = [str(c).lower() for c in (schema_info.get("columns") or [])]
         if cand in cols:
@@ -143,20 +164,24 @@ class StructuredExecutor:
         # Embed candidate token and compute cosine similarity to each column vector
         try:
             from ai_core.pipeline.embedding.embedding_service import EmbeddingService
+
             emb = EmbeddingService()
             vq = emb.embed_query(cand, "default")  # tenant-independent semantic mapping
         except Exception:
             vq = None
         best = None
         best_sim = -1.0
+
         def cos(a: List[float], b: List[float]) -> float:
             if not a or not b:
                 return -1.0
             import math
-            num = sum(x*y for x, y in zip(a, b))
-            da = math.sqrt(sum(x*x for x in a)) or 1.0
-            db = math.sqrt(sum(y*y for y in b)) or 1.0
-            return num / (da*db)
+
+            num = sum(x * y for x, y in zip(a, b))
+            da = math.sqrt(sum(x * x for x in a)) or 1.0
+            db = math.sqrt(sum(y * y for y in b)) or 1.0
+            return num / (da * db)
+
         if vq:
             for col, vec in synmap.items():
                 s = cos(vq, vec)
@@ -171,7 +196,12 @@ class StructuredExecutor:
                 return col
         return None
 
-    def _build_where(self, parsed: Dict[str, Any], schema_info: Dict[str, Any], synmap: Dict[str, List[str]]) -> Tuple[str, Dict[str, Any]]:
+    def _build_where(
+        self,
+        parsed: Dict[str, Any],
+        schema_info: Dict[str, Any],
+        synmap: Dict[str, List[str]],
+    ) -> Tuple[str, Dict[str, Any]]:
         filters = parsed.get("filters") or {}
         clauses: List[str] = []
         params: Dict[str, Any] = {}
@@ -187,15 +217,23 @@ class StructuredExecutor:
         where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         return where_sql, params
 
-    def _run_duckdb(self, df, parsed: Dict[str, Any], schema_info: Dict[str, Any], synmap: Dict[str, List[str]], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _run_duckdb(
+        self,
+        df,
+        parsed: Dict[str, Any],
+        schema_info: Dict[str, Any],
+        synmap: Dict[str, List[str]],
+        context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
         tenant = str(context.get("tenant_id", "default"))
         # Aging policy for per-tenant connections
         import time
         from shared.config.tuning import retrieval as retr_cfg
+
         # Close stale connections
         try:
-            ttl = int(getattr(retr_cfg, 'duckdb_conn_ttl_s', 900))
-            max_conns = int(getattr(retr_cfg, 'duckdb_max_conns', 16))
+            ttl = int(getattr(retr_cfg, "duckdb_conn_ttl_s", 900))
+            max_conns = int(getattr(retr_cfg, "duckdb_max_conns", 16))
         except Exception:
             ttl = 900
             max_conns = 16
@@ -214,7 +252,9 @@ class StructuredExecutor:
         # Enforce max pool size by evicting oldest
         if len(self._tenant_conn) >= max_conns and tenant not in self._tenant_conn:
             try:
-                oldest_t = sorted(self._tenant_conn_ts.items(), key=lambda x: x[1])[0][0]
+                oldest_t = sorted(self._tenant_conn_ts.items(), key=lambda x: x[1])[0][
+                    0
+                ]
                 oc = self._tenant_conn.get(oldest_t)
                 if oc:
                     oc.close()
@@ -250,13 +290,23 @@ class StructuredExecutor:
                     break
             if not target:
                 # find first eligible numeric column
-                for c in (schema_info.get("columns") or []):
+                for c in schema_info.get("columns") or []:
                     if self._eligible(schema_info, str(c).lower(), op):
                         target = str(c).lower()
                         break
             if not target:
                 return None
-            func = "avg" if op == "avg" else ("sum" if op == "sum" else ("min" if op == "min" else ("max" if op == "max" else "median")))
+            func = (
+                "avg"
+                if op == "avg"
+                else (
+                    "sum"
+                    if op == "sum"
+                    else (
+                        "min" if op == "min" else ("max" if op == "max" else "median")
+                    )
+                )
+            )
             sql = f"SELECT {func}({target}) AS value FROM t {where_sql}"
         else:
             # group by if specified
@@ -283,16 +333,39 @@ class StructuredExecutor:
         if isinstance(res[0], tuple) and len(res[0]) == 1:
             val = res[0][0]
             summary = self._summarize(parsed, val)
-            self.log.info(f"executor: agg={parsed['operation']} filters={parsed.get('filters')} result={val}")
-            return {"intent": "aggregate", "query_type": parsed["operation"], "filters": parsed.get("filters"), "result": val, "summary": summary}
+            self.log.info(
+                f"executor: agg={parsed['operation']} filters={parsed.get('filters')} result={val}"
+            )
+            return {
+                "intent": "aggregate",
+                "query_type": parsed["operation"],
+                "filters": parsed.get("filters"),
+                "result": val,
+                "summary": summary,
+            }
         else:
             # table output (group by)
             rows = [{"key": r[0], "value": r[1]} for r in res]
             summary = ", ".join([f"{r['key']} {r['value']}" for r in rows[:6]])
-            self.log.info(f"executor: agg=group filters={parsed.get('filters')} result_rows={len(rows)}")
-            return {"intent": "aggregate", "query_type": "groupby", "filters": parsed.get("filters"), "result": rows, "summary": summary}
+            self.log.info(
+                f"executor: agg=group filters={parsed.get('filters')} result_rows={len(rows)}"
+            )
+            return {
+                "intent": "aggregate",
+                "query_type": "groupby",
+                "filters": parsed.get("filters"),
+                "result": rows,
+                "summary": summary,
+            }
 
-    def _run_pandas(self, df, parsed: Dict[str, Any], schema_info: Dict[str, Any], synmap: Dict[str, List[str]], context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _run_pandas(
+        self,
+        df,
+        parsed: Dict[str, Any],
+        schema_info: Dict[str, Any],
+        synmap: Dict[str, List[str]],
+        context: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
         # Very lightweight fallback using pandas ops
         try:
             import pandas as _pd  # type: ignore
@@ -309,15 +382,25 @@ class StructuredExecutor:
 
         if op == "count":
             val = int(len(fdf))
-            return {"intent": "aggregate", "query_type": "count", "filters": parsed.get("filters"), "result": val, "summary": self._summarize(parsed, val)}
+            return {
+                "intent": "aggregate",
+                "query_type": "count",
+                "filters": parsed.get("filters"),
+                "result": val,
+                "summary": self._summarize(parsed, val),
+            }
         elif op in ("sum", "avg", "min", "max", "median"):
             target = None
             for c in fdf.columns:
                 if self._eligible(schema_info, str(c).lower(), op):
-                    target = c; break
+                    target = c
+                    break
             if not target:
                 return None
-            s = _pd.to_numeric(fdf[target].astype(str).str.replace(",", "").str.replace("$", ""), errors='coerce')
+            s = _pd.to_numeric(
+                fdf[target].astype(str).str.replace(",", "").str.replace("$", ""),
+                errors="coerce",
+            )
             if op == "sum":
                 val = float(s.sum())
             elif op == "avg":
@@ -328,7 +411,13 @@ class StructuredExecutor:
                 val = float(s.max())
             else:
                 val = float(s.median())
-            return {"intent": "aggregate", "query_type": op, "filters": parsed.get("filters"), "result": val, "summary": self._summarize(parsed, val)}
+            return {
+                "intent": "aggregate",
+                "query_type": op,
+                "filters": parsed.get("filters"),
+                "result": val,
+                "summary": self._summarize(parsed, val),
+            }
 
         g = parsed.get("groupby")
         if g:
@@ -337,7 +426,13 @@ class StructuredExecutor:
                 vc = fdf[col].astype(str).str.strip().value_counts()
                 rows = [{"key": k, "value": int(v)} for k, v in vc.items()]
                 summary = ", ".join([f"{r['key']} {r['value']}" for r in rows[:6]])
-                return {"intent": "aggregate", "query_type": "groupby", "filters": parsed.get("filters"), "result": rows, "summary": summary}
+                return {
+                    "intent": "aggregate",
+                    "query_type": "groupby",
+                    "filters": parsed.get("filters"),
+                    "result": rows,
+                    "summary": summary,
+                }
         return None
 
     def _summarize(self, parsed: Dict[str, Any], value: Any) -> str:
@@ -357,6 +452,3 @@ class StructuredExecutor:
         if op in ("min", "max", "median"):
             return f"{op.title()} is {value}."
         return str(value)
-
-
-

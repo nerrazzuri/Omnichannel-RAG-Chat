@@ -12,10 +12,18 @@ spec:
       template:
         spec:
           serviceAccountName: ai-core
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
           restartPolicy: OnFailure
           containers:
             - name: pg-backup
-              image: ghcr.io/bitnami/postgresql:15
+              image: amazon/aws-cli:2.15.0
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
               env:
                 - name: PGBACKUP_S3_URL
                   valueFrom:
@@ -38,14 +46,20 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  TS=$(date +%s)
-                  OUT=/tmp/backup-$TS
-                  pg_basebackup -D $OUT -Ft -X fetch -z
-                  SIZE=$(du -sb $OUT | awk '{print $1}')
-                  # upload to S3 (placeholder; replace with aws s3 cp or rclone)
-                  echo "Uploading to $PGBACKUP_S3_URL"
-                  # Mark success to AI-Core
-                  curl -s -X POST http://ai-core:8000/v1/admin/backup/mark \
-                    -H 'Content-Type: application/json' \
-                    -d "{\"system\":\"postgres\",\"status\":\"success\",\"duration_ms\":0,\"size_bytes\":$SIZE,\"ts_unix\":$TS}" || true
+                  /bin/bash /scripts/pg_backup.sh
+              volumeMounts:
+                - name: backup-scripts
+                  mountPath: /scripts
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "300m"
+                  memory: "256Mi"
+          volumes:
+            - name: backup-scripts
+              configMap:
+                name: backup-scripts
 
