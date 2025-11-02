@@ -1,0 +1,8 @@
+groups:
+  - name: ingress
+    rules:
+      - alert: IngressTimeouts
+        expr: (sum(rate(nginx_ingress_controller_request_duration_seconds_count{status=~"5.."}[5m])) / sum(rate(nginx_ingress_controller_request_duration_seconds_count[5m]))) > 0.005
+        for: 10m
+        labels: { severity: warning }
+

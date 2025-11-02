@@ -1,0 +1,13 @@
+{
+  "title": "Backups Overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "1m",
+  "panels": [
+    {"type": "stat", "title": "Last PG Success (unix)", "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}, "targets": [{"expr": "backup_last_success_unixtime{system=\"postgres\"}"}]},
+    {"type": "stat", "title": "Last Redis Success (unix)", "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0}, "targets": [{"expr": "backup_last_success_unixtime{system=\"redis\"}"}]},
+    {"type": "stat", "title": "Last Qdrant Success (unix)", "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0}, "targets": [{"expr": "backup_last_success_unixtime{system=\"qdrant\"}"}]},
+    {"type": "graph", "title": "Backup Duration (ms)", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}, "targets": [{"expr": "backup_duration_ms_sum"}]},
+    {"type": "graph", "title": "Backup Size (bytes)", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}, "targets": [{"expr": "backup_last_size_bytes"}]}
+  ]
+}

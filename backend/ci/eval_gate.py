@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from shared.config.tuning import quality_gate
+import httpx
 from ai_core.evaluator.suite import run_suite
 
 
@@ -54,6 +55,19 @@ def main():
                 summary["passed"] = False
             if res.get("avg_latency_ms", 999999) > quality_gate.max_avg_latency_ms:
                 summary["passed"] = False
+
+    # Metrics endpoint smoke
+    api_base = os.getenv("READINESS_API_BASE")
+    if api_base:
+        try:
+            with httpx.Client(timeout=10) as client:
+                r = client.get(api_base.rstrip('/') + "/metrics")
+                summary["metrics_ok"] = (r.status_code == 200 and len(r.text) > 0)
+                if not summary["metrics_ok"]:
+                    summary["passed"] = False
+        except Exception:
+            summary["metrics_ok"] = False
+            summary["passed"] = False
 
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)

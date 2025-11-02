@@ -1,0 +1,12 @@
+groups:
+  - name: backups
+    rules:
+      - alert: BackupMissedWindow
+        expr: (time() - backup_last_success_unixtime) > 24*3600
+        for: 30m
+        labels: { severity: warning }
+      - alert: BackupFailures
+        expr: increase(backup_failure_total[24h]) > 0
+        for: 10m
+        labels: { severity: warning }
+

@@ -1,0 +1,11 @@
+{
+  "title": "Redis Overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {"type": "stat", "title": "Memory (MiB)", "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}, "targets": [{"expr": "redis_memory_used_bytes/1024/1024"}]},
+    {"type": "stat", "title": "Evictions", "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}, "targets": [{"expr": "increase(redis_evicted_keys_total[5m])"}]},
+    {"type": "graph", "title": "Hit/Miss", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6}, "targets": [{"expr": "rate(redis_keyspace_hits_total[5m])"}, {"expr": "rate(redis_keyspace_misses_total[5m])"}]}
+  ]
+}

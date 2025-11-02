@@ -1,0 +1,16 @@
+groups:
+  - name: gateway
+    rules:
+      - alert: GatewayHighLatency
+        expr: histogram_quantile(0.95, sum(rate(gateway_request_latency_seconds_bucket[10m])) by (le)) > 1.0
+        for: 10m
+        labels: { severity: warning }
+      - alert: GatewayErrorBudget
+        expr: (sum(rate(gateway_requests_total{status=~"5.."}[15m])) / sum(rate(gateway_requests_total[15m]))) > 0.01
+        for: 15m
+        labels: { severity: warning }
+      - alert: GatewayRateLimitPressure
+        expr: increase(gateway_rate_limit_hits_total[5m]) > 0
+        for: 5m
+        labels: { severity: info }
+

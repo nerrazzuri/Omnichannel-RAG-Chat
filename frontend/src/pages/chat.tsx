@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { streamQuery } from '../services/chatService';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import MessageRenderer from '../components/MessageRenderer';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 
@@ -72,11 +71,7 @@ export default function ChatPage() {
           <div className={`${isUser ? 'bg-blue-600 text-white' : 'bg-white text-gray-900 border border-gray-200'} px-4 py-3 rounded-2xl shadow-sm w-full`}> 
             {isUser ? (
               <div className="whitespace-pre-wrap leading-relaxed text-sm">{m.content}</div>
-            ) : (
-              <div className="prose prose-sm max-w-none">
-                <ReactMarkdown remarkPlugins={[remarkGfm as any]}>{m.content}</ReactMarkdown>
-              </div>
-            )}
+            ) : (<MessageRenderer content={m.content} />)}
             {!isUser && urls.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {urls.map((u, idx) => (

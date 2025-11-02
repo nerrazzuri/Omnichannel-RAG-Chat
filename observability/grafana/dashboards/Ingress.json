@@ -1,0 +1,11 @@
+{
+  "title": "Ingress Overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {"type": "stat", "title": "RPS", "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0}, "targets": [{"expr": "sum(rate(nginx_ingress_controller_requests[5m]))"}]},
+    {"type": "stat", "title": "p95 Upstream (s)", "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0}, "targets": [{"expr": "histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket[5m])) by (le))"}]},
+    {"type": "graph", "title": "Timeout ratio", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 6}, "targets": [{"expr": "sum(rate(nginx_ingress_controller_request_duration_seconds_count{exported_service=~\".+\"}[5m])) / sum(rate(nginx_ingress_controller_request_duration_seconds_sum[5m]))"}]}
+  ]
+}

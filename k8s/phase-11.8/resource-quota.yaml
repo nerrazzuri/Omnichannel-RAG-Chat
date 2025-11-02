@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: namespace-quota
+  namespace: omni-staging
+spec:
+  hard:
+    pods: "100"
+    requests.cpu: "30"
+    requests.memory: 40Gi
+    limits.cpu: "60"
+    limits.memory: 80Gi
+
+
