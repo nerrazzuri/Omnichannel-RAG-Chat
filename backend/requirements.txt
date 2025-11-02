@@ -15,7 +15,7 @@ redis==5.0.1
 # AI/ML and RAG
 langchain==0.0.354
 langchain-openai==0.0.5
-openai==1.10.0
+openai==2.6.1
 tiktoken==0.5.2
 numpy==1.26.2
 
