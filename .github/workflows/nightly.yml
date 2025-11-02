@@ -1,0 +1,111 @@
+name: nightly-audit
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # daily at 02:00 UTC
+  workflow_dispatch:
+
+jobs:
+  deep-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Docker metadata
+        run: docker version
+
+      - name: Build images
+        run: |
+          docker build -t local/ai-core:ci backend
+          docker build -t local/gateway:ci gateway
+          docker build -t local/frontend:ci frontend
+
+      - name: Trivy scan filesystem
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+      - name: Trivy scan ai-core image
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: 'local/ai-core:ci'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+      - name: Trivy scan gateway image
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: 'local/gateway:ci'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+      - name: Trivy scan frontend image
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          image-ref: 'local/frontend:ci'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+      - name: Terraform validate (staging)
+        working-directory: infra/terraform/staging
+        run: |
+          terraform init -input=false -backend=false
+          terraform fmt -check
+          terraform validate
+
+      - name: Launch stack (compose)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          docker compose up -d
+          python - <<'PY'
+          import time,urllib.request
+          url='http://localhost:8000/v1/ready'
+          for _ in range(60):
+              try:
+                  with urllib.request.urlopen(url, timeout=2) as r:
+                      if r.getcode()==200:
+                          print('AI-Core ready')
+                          break
+              except Exception:
+                  pass
+              time.sleep(3)
+          else:
+              raise SystemExit('AI-Core not ready')
+          PY
+
+      - name: RAG evaluation
+        env:
+          AI_CORE_URL: http://localhost:8000
+        run: |
+          python devops/audits/rag_eval.py --base "$AI_CORE_URL" --out devops/reports/rag_eval.json
+          cat devops/reports/rag_eval.json
+
+      - name: Load test (Locust headless)
+        env:
+          AI_CORE_URL: http://localhost:8000
+        run: |
+          locust -f devops/audits/locustfile.py --host "$AI_CORE_URL" --headless -u 50 -r 10 -t 1m
+
+      - name: Shutdown stack
+        if: always()
+        run: docker compose down -v
+

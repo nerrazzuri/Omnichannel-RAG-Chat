@@ -30,4 +30,12 @@ module "gateway" {
   vault_path = "kv/gateway"
 }
 
+# Backup bucket for prod
+module "backup" {
+  source        = "../modules/backup"
+  bucket_name   = "omni-prod-backups"
+  retention_days = 90
+  tags = { env = "prod", service = "bdr" }
+}
+
 

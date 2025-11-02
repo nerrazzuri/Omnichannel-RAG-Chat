@@ -13,6 +13,14 @@ module "vault" {
   k8s_sa_jwt = var.k8s_sa_jwt
   k8s_ca_crt = var.k8s_ca_crt
 }
+
+# Backup bucket for staging
+module "backup" {
+  source       = "../modules/backup"
+  bucket_name  = "omni-staging-backups"
+  retention_days = 30
+  tags = { env = "staging", service = "bdr" }
+}
 resource "kubernetes_namespace" "ns" {
   metadata {
     name = var.namespace

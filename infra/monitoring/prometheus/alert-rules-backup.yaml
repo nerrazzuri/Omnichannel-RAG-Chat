@@ -1,0 +1,28 @@
+groups:
+  - name: backup-health
+    rules:
+      - alert: BackupPostgresMissedWindow
+        expr: (time() - backup_last_success_unixtime{system="postgres"}) > 21600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres backup missed 6h window"
+          description: "Last success was {{ $value }} seconds ago"
+      - alert: BackupRedisMissedWindow
+        expr: (time() - backup_last_success_unixtime{system="redis"}) > 21600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis backup missed 6h window"
+          description: "Last success was {{ $value }} seconds ago"
+      - alert: BackupQdrantMissedWindow
+        expr: (time() - backup_last_success_unixtime{system="qdrant"}) > 21600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Qdrant backup missed 6h window"
+          description: "Last success was {{ $value }} seconds ago"
+

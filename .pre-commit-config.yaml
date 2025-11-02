@@ -1,7 +1,62 @@
 repos:
-  - repo: https://github.com/awslabs/git-secrets
-    rev: v1.3.0
+  - repo: https://github.com/psf/black
+    rev: 23.11.0
     hooks:
-      - id: git-secrets
-        args: ["--register-aws"]
+      - id: black
+        args: ["--check"]
+        files: ^backend/|^devops/
 
+  - repo: https://github.com/PyCQA/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        files: ^backend/|^devops/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.7.1
+    hooks:
+      - id: mypy
+        files: ^backend/|^devops/
+        additional_dependencies: [types-requests==2.32.0.20241016]
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        name: bandit
+        args: ["-r", "backend", "-x", "backend/tests"]
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.4.0
+    hooks:
+      - id: detect-secrets
+        name: detect-secrets-scan
+        args: ["--all-files"]
+
+  # Node hooks via local wrapper to use project toolchains
+  - repo: local
+    hooks:
+      - id: eslint-frontend
+        name: eslint (frontend)
+        entry: bash -lc "cd frontend && npx --yes eslint . --ext .ts,.tsx,.js"
+        language: system
+        types: [file]
+        pass_filenames: false
+      - id: eslint-gateway
+        name: eslint (gateway)
+        entry: bash -lc "cd gateway && npx --yes eslint . --ext .ts,.tsx,.js"
+        language: system
+        types: [file]
+        pass_filenames: false
+      - id: prettier-frontend
+        name: prettier check (frontend)
+        entry: bash -lc "cd frontend && npx --yes prettier -c ."
+        language: system
+        types: [file]
+        pass_filenames: false
+      - id: prettier-gateway
+        name: prettier check (gateway)
+        entry: bash -lc "cd gateway && npx --yes prettier -c ."
+        language: system
+        types: [file]
+        pass_filenames: false

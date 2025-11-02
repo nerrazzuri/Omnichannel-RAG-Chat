@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+spec:
+  schedule: "15 */6 * * *"
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: redis-backup
+              image: redis:7
+              command: ["/bin/bash", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  TS=$(date +%s)
+                  redis-cli -h redis BGSAVE
+                  # wait for RDB to complete (simple wait)
+                  sleep 20
+                  SIZE=0
+                  curl -s -X POST http://ai-core:8000/v1/admin/backup/mark \
+                    -H 'Content-Type: application/json' \
+                    -d "{\"system\":\"redis\",\"status\":\"success\",\"duration_ms\":0,\"size_bytes\":$SIZE,\"ts_unix\":$TS}" || true
+

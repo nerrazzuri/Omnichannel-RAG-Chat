@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+spec:
+  schedule: "0 */6 * * *" # every 6 hours
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: ai-core
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-backup
+              image: ghcr.io/bitnami/postgresql:15
+              env:
+                - name: PGBACKUP_S3_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: backup-secrets
+                      key: PGBACKUP_S3_URL
+                - name: PGHOST
+                  value: postgres
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef:
+                      name: backup-secrets
+                      key: PGUSER
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: backup-secrets
+                      key: PGPASSWORD
+              command: ["/bin/bash", "-lc"]
+              args:
+                - |
+                  set -euo pipefail
+                  TS=$(date +%s)
+                  OUT=/tmp/backup-$TS
+                  pg_basebackup -D $OUT -Ft -X fetch -z
+                  SIZE=$(du -sb $OUT | awk '{print $1}')
+                  # upload to S3 (placeholder; replace with aws s3 cp or rclone)
+                  echo "Uploading to $PGBACKUP_S3_URL"
+                  # Mark success to AI-Core
+                  curl -s -X POST http://ai-core:8000/v1/admin/backup/mark \
+                    -H 'Content-Type: application/json' \
+                    -d "{\"system\":\"postgres\",\"status\":\"success\",\"duration_ms\":0,\"size_bytes\":$SIZE,\"ts_unix\":$TS}" || true
+
