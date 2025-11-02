@@ -10,7 +10,7 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install dependencies (deterministic)
 RUN npm ci
 
 # Copy source code
@@ -33,8 +33,8 @@ RUN adduser --system --uid 1001 nextjs
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies only
-RUN npm install --omit=dev && npm cache clean --force
+# Install production dependencies only (deterministic)
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/.next ./.next
@@ -46,6 +46,11 @@ RUN chown -R nextjs:nodejs /app
 
 # Switch to non-root user
 USER nextjs
+
+# Set production env and tini for signal handling
+ENV NODE_ENV=production
+RUN apk add --no-cache tini
+ENTRYPOINT ["/sbin/tini", "--"]
 
 # Expose port
 EXPOSE 3000

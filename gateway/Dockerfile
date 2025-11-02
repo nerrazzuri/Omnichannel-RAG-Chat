@@ -10,8 +10,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install all deps for build (dev included)
-RUN npm install
+# Install all deps for build (deterministic)
+RUN npm ci
 
 # Copy source code
 COPY src/ ./src/
@@ -34,8 +34,8 @@ RUN adduser -S nestjs -u 1001
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies only
-RUN npm install --omit=dev && npm cache clean --force
+# Install production dependencies only (deterministic)
+RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
@@ -45,6 +45,11 @@ RUN mkdir -p logs && chown -R nestjs:nodejs /app
 
 # Switch to non-root user
 USER nestjs
+
+# Set production env and use tini for signal handling
+ENV NODE_ENV=production
+RUN apk add --no-cache tini
+ENTRYPOINT ["/sbin/tini", "--"]
 
 # Expose port
 EXPOSE 3001

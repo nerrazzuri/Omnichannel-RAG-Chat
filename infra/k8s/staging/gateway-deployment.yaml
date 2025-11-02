@@ -2,9 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gateway
+  namespace: omni-staging
   labels:
     app: gateway
-    tier: api
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: omnichannel
 spec:
   replicas: 2
   selector:
@@ -14,21 +17,9 @@ spec:
     metadata:
       labels:
         app: gateway
-        tier: api
-      annotations:
-        vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: "gateway"
-        vault.hashicorp.com/agent-inject-secret-gateway.env: "kv/gateway"
-        vault.hashicorp.com/agent-inject-template-gateway.env: |
-          {{- with secret "kv/gateway" -}}
-          export JWT_SECRET="{{ .Data.data.JWT_SECRET }}"
-          export AI_CORE_URL="{{ .Data.data.AI_CORE_URL }}"
-          {{- end -}}
-        vault.hashicorp.com/agent-inject-secret-sentry.env: "kv/gateway/sentry"
-        vault.hashicorp.com/agent-inject-template-sentry.env: |
-          {{- with secret "kv/gateway/sentry" -}}
-          export SENTRY_DSN="{{ .Data.data.DSN }}"
-          {{- end -}}
+        app.kubernetes.io/name: gateway
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: omnichannel
     spec:
       serviceAccountName: gateway
       securityContext:
@@ -36,7 +27,7 @@ spec:
         runAsUser: 1001
       containers:
         - name: gateway
-          image: nerrazzuri/omnichannel-gateway:latest
+          image: ghcr.io/example/gateway:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3001
@@ -48,73 +39,8 @@ spec:
           env:
             - name: NODE_ENV
               value: "staging"
-          envFrom:
-            - secretRef:
-                name: gateway-env
-          volumeMounts:
-            - name: vault-secrets
-              mountPath: /vault/secrets
-              readOnly: true
-          livenessProbe:
-            httpGet:
-              path: /v1/health
-              port: 3001
-            initialDelaySeconds: 10
-            periodSeconds: 30
-          readinessProbe:
-            httpGet:
-              path: /v1/ready
-              port: 3001
-            initialDelaySeconds: 10
-            periodSeconds: 15
-          resources:
-            requests:
-              cpu: "200m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-      volumes:
-        - name: vault-secrets
-          emptyDir: {}
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: gateway
-  namespace: omni-staging
-  labels:
-    app: gateway
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: gateway
-  template:
-    metadata:
-      labels:
-        app: gateway
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1001
-      containers:
-        - name: gateway
-          image: ghcr.io/example/gateway:latest
-          ports:
-            - containerPort: 3001
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          env:
             - name: AI_CORE_URL
               value: http://ai-core:8000
-            - name: JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: omni-secrets
-                  key: jwt-secret
           readinessProbe:
             httpGet:
               path: /api/health
@@ -142,6 +68,9 @@ metadata:
   namespace: omni-staging
   labels:
     app: gateway
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: omnichannel
 spec:
   selector:
     app: gateway
@@ -149,3 +78,4 @@ spec:
     - name: http
       port: 3001
       targetPort: 3001
+

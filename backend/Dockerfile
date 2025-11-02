@@ -77,11 +77,12 @@ RUN groupadd -r appuser && useradd -m -r -g appuser appuser
 # Set working directory
 WORKDIR /app
 
-# Install runtime system dependencies
+# Install runtime system dependencies (tini for PID1)
 RUN apt-get update -o Acquire::Retries=5 && \
     apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    tini \
     tesseract-ocr \
     tesseract-ocr-eng && \
     rm -rf /var/lib/apt/lists/*
@@ -102,7 +103,8 @@ RUN mkdir -p logs /home/appuser/.cache && chown -R appuser:appuser /app /home/ap
 USER appuser
 
 # Set Python path to include application source
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1
 ENV PATH=/home/appuser/.local/bin:$PATH
 ENV HF_HOME=/home/appuser/.cache/huggingface \
     TRANSFORMERS_CACHE=/home/appuser/.cache/huggingface \
@@ -118,5 +120,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:8000/v1/health || exit 1
 
+# Entrypoint with tini for proper signal handling
+ENTRYPOINT ["/usr/bin/tini", "--"]
 # Start the application (module path matches PYTHONPATH)
 CMD ["uvicorn", "ai_core.main:app", "--host", "0.0.0.0", "--port", "8000"]

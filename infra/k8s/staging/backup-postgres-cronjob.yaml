@@ -4,6 +4,8 @@ metadata:
   name: pg-backup
 spec:
   schedule: "0 */6 * * *" # every 6 hours
+  concurrencyPolicy: Forbid
+  ttlSecondsAfterFinished: 86400
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 2
   jobTemplate:

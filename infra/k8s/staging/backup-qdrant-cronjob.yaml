@@ -4,6 +4,8 @@ metadata:
   name: qdrant-backup
 spec:
   schedule: "30 */6 * * *"
+  concurrencyPolicy: Forbid
+  ttlSecondsAfterFinished: 86400
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 2
   jobTemplate:

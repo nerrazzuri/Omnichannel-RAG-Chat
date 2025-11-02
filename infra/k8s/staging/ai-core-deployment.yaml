@@ -4,7 +4,7 @@ metadata:
   name: ai-core
   namespace: omni-staging
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ai-core
@@ -12,6 +12,9 @@ spec:
     metadata:
       labels:
         app: ai-core
+        app.kubernetes.io/name: ai-core
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: omnichannel
     spec:
       securityContext:
         runAsNonRoot: true
@@ -20,6 +23,7 @@ spec:
       containers:
         - name: ai-core
           image: ghcr.io/nerrazzuri/omni-ai-core:staging
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           securityContext:
@@ -36,7 +40,7 @@ spec:
               value: http://qdrant:6333
           readinessProbe:
             httpGet:
-              path: /v1/health
+              path: /v1/ready
               port: 8000
             initialDelaySeconds: 5
           livenessProbe:
@@ -44,6 +48,9 @@ spec:
               path: /v1/health
               port: 8000
             initialDelaySeconds: 10
+          envFrom:
+            - secretRef:
+                name: ai-core-env
           resources:
             requests:
               cpu: "250m"
