@@ -16,10 +16,14 @@ spec:
         app.kubernetes.io/component: backend
         app.kubernetes.io/part-of: omnichannel
     spec:
+      automountServiceAccountToken: false
+      serviceAccountName: ai-core
       securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        fsGroup: 10001
         runAsNonRoot: true
-        runAsUser: 1001
-        fsGroup: 1001
+        runAsUser: 10001
       containers:
         - name: ai-core
           image: ghcr.io/nerrazzuri/omni-ai-core:staging
@@ -29,6 +33,9 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             capabilities:
               drop: ["ALL"]
           env:
@@ -43,21 +50,27 @@ spec:
               path: /v1/ready
               port: 8000
             initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /v1/health
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
           envFrom:
             - secretRef:
                 name: ai-core-env
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "200m"
+              memory: "256Mi"
             limits:
-              cpu: "1000m"
-              memory: "2Gi"
+              cpu: "1"
+              memory: "512Mi"
 ---
 apiVersion: v1
 kind: Service

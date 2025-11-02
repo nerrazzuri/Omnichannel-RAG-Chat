@@ -5,17 +5,23 @@ metadata:
 spec:
   schedule: "30 */6 * * *"
   concurrencyPolicy: Forbid
-  ttlSecondsAfterFinished: 86400
-  successfulJobsHistoryLimit: 2
-  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 1
       template:
         spec:
+          automountServiceAccountToken: false
+          serviceAccountName: backup
           securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+            fsGroup: 10001
             runAsNonRoot: true
-            runAsUser: 1001
+            runAsUser: 10001
           restartPolicy: OnFailure
           containers:
             - name: qdrant-backup
@@ -23,6 +29,9 @@ spec:
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 10001
+                runAsGroup: 10001
                 capabilities:
                   drop: ["ALL"]
               command: ["/bin/bash", "-lc"]

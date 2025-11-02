@@ -16,9 +16,14 @@ spec:
         app.kubernetes.io/component: web
         app.kubernetes.io/part-of: omnichannel
     spec:
+      automountServiceAccountToken: false
+      serviceAccountName: frontend
       securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        fsGroup: 10001
         runAsNonRoot: true
-        runAsUser: 1001
+        runAsUser: 10001
       containers:
         - name: frontend
           image: ghcr.io/nerrazzuri/omni-frontend:staging
@@ -28,6 +33,9 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
             capabilities:
               drop: ["ALL"]
           env:
@@ -38,17 +46,23 @@ spec:
               path: /
               port: 3000
             initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /
               port: 3000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
           resources:
             requests:
               cpu: "200m"
               memory: "256Mi"
             limits:
-              cpu: "500m"
+              cpu: "1"
               memory: "512Mi"
 ---
 apiVersion: v1
@@ -57,7 +71,7 @@ metadata:
   name: frontend
   namespace: omni-staging
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector:
     app: frontend
   ports:

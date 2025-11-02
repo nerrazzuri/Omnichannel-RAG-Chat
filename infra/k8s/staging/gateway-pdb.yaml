@@ -4,7 +4,7 @@ metadata:
   name: gateway-pdb
   namespace: omni-staging
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: gateway

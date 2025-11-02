@@ -5,18 +5,23 @@ metadata:
 spec:
   schedule: "0 */6 * * *" # every 6 hours
   concurrencyPolicy: Forbid
-  ttlSecondsAfterFinished: 86400
-  successfulJobsHistoryLimit: 2
-  failedJobsHistoryLimit: 2
+  startingDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 1
       template:
         spec:
-          serviceAccountName: ai-core
+          automountServiceAccountToken: false
+          serviceAccountName: backup
           securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+            fsGroup: 10001
             runAsNonRoot: true
-            runAsUser: 1001
+            runAsUser: 10001
           restartPolicy: OnFailure
           containers:
             - name: pg-backup
@@ -24,26 +29,14 @@ spec:
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 10001
+                runAsGroup: 10001
                 capabilities:
                   drop: ["ALL"]
-              env:
-                - name: PGBACKUP_S3_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: backup-secrets
-                      key: PGBACKUP_S3_URL
-                - name: PGHOST
-                  value: postgres
-                - name: PGUSER
-                  valueFrom:
-                    secretKeyRef:
-                      name: backup-secrets
-                      key: PGUSER
-                - name: PGPASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: backup-secrets
-                      key: PGPASSWORD
+              envFrom:
+                - secretRef:
+                    name: backup-secrets
               command: ["/bin/bash", "-lc"]
               args:
                 - |
