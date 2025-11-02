@@ -24,6 +24,7 @@ spec:
         fsGroup: 10001
         runAsNonRoot: true
         runAsUser: 10001
+        runAsGroup: 10001
       containers:
         - name: ai-core
           image: ghcr.io/nerrazzuri/omni-ai-core:staging
