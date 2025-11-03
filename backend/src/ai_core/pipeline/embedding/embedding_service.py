@@ -26,13 +26,28 @@ class EmbeddingService:
             "embedding_model",
             os.getenv("RAG_EMBED_MODEL", "text-embedding-3-large"),
         )
+        self._logger = logging.getLogger(__name__)
+
+    def _ensure_client(self) -> None:
+        if self.client is None:
+            try:
+                api_key = secret_manager.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+                if api_key:
+                    self.client = OpenAI(api_key=api_key)
+            except Exception as e:
+                self._logger.error(f"Embedding client init failed: {e}")
 
     def _cache_key(self, text: str) -> str:
         digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
         return f"emb:{self.model}:{digest}"
 
     def embed_query(self, query: str, tenant_id: str) -> Optional[List[float]]:
-        if not query or not self.client:
+        if not query:
+            return None
+        # Lazy init to avoid early-return bugs
+        self._ensure_client()
+        if not self.client:
+            self._logger.error("Embedding client unavailable; skipping embed")
             return None
         k = self._cache_key(query)
         cached = redis_cache.get_tenant_key(tenant_id, k)

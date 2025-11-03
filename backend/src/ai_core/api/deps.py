@@ -20,8 +20,9 @@ def require(action: str, resource: Dict[str, Any] | None = None):
         db=Depends(get_db),
         request: Request = None,
     ) -> Dict[str, Any]:
-        # Temporary bypass for local testing (set AUTH_ALLOW_ALL=1). Returns ADMIN claims.
-        if os.getenv("AUTH_ALLOW_ALL", "false").lower() in ("1", "true", "yes"):
+        # Temporary bypass ONLY in dev/local/test (set AUTH_ALLOW_ALL=1). Returns ADMIN claims.
+        env = os.getenv("ENV", "dev").lower()
+        if env in ("dev", "local", "test") and os.getenv("AUTH_ALLOW_ALL", "false").lower() in ("1", "true", "yes"):
             claims = {
                 "user_id": "dev-admin",
                 "tenant_id": os.getenv(
@@ -33,7 +34,7 @@ def require(action: str, resource: Dict[str, Any] | None = None):
                 from shared.logging.pipeline_logger import PipelineLogger
 
                 PipelineLogger(claims["tenant_id"]).emit(
-                    {"auth_bypass": {"action": action}}
+                    {"event": "auth_bypass", "action": action, "service": "ai-core", "severity": "warning"}
                 )
             except Exception:
                 pass
