@@ -38,8 +38,13 @@ def _fetch_approvals(db: Session, batch_size: int):
     sel_cols = [c for c in base_cols if c in cols]
     if "action_payload_json" in cols:
         sel_cols.append("action_payload_json")
+    where_clauses = ["status = :st"]
+    if "executed" in cols:
+        where_clauses.append("executed = false")
+    if "deleted_at" in cols:
+        where_clauses.append("deleted_at IS NULL")
     sql = _sql(
-        f"SELECT {', '.join(sel_cols)} FROM approvals WHERE status = :st AND executed = false AND deleted_at IS NULL ORDER BY created_at ASC LIMIT :lim"
+        f"SELECT {', '.join(sel_cols)} FROM approvals WHERE {' AND '.join(where_clauses)} ORDER BY created_at ASC LIMIT :lim"
     )
     rows = db.execute(sql, {"st": "approved", "lim": max(1, int(batch_size))}).mappings().all()
     return rows, ("action_payload_json" in sel_cols)

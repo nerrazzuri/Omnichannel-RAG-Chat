@@ -110,8 +110,19 @@ class ComplianceReporter:
         except Exception:
             pass
         if latest_enforced and latest_enforced.last_enforced_at:
-            age = (_now_utc() - latest_enforced.last_enforced_at).total_seconds()
-            ok = ok and (age <= thr)
+            ts = latest_enforced.last_enforced_at
+            try:
+                from datetime import timezone as _tz
+
+                if getattr(ts, "tzinfo", None) is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+            except Exception:
+                pass
+            try:
+                age = (_now_utc() - ts).total_seconds()
+                ok = ok and (age <= thr)
+            except Exception:
+                pass
         return {"lag_seconds": lag_s, "ok": bool(ok)}
 
     def _collect_vault(self, series: Dict[str, list[Tuple[Dict[str, str], float]]]) -> Dict[str, Any]:
