@@ -6,6 +6,7 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 - ✅ Restore functional authentication: dev-only bypass; strict 401 fail-closed; Gateway JWT guard with per-route scopes; claims propagate to AI-Core
 - ✅ Embedding pipeline authorization bug: lazy OpenAI init; ingestion generates embeddings; Qdrant upsert with retry; unit test for upload→chunks
 - ✅ Secrets and credentials: prod Compose uses Docker secrets via *_FILE; backend loads *_FILE; Terraform optional Vault provider + TF_VAR coalesce
+  - Update: Local compose supports Vault Agent overlay (docker-compose.vault.yml) writing JWT to file; gateway loads JWT_SECRET from *_FILE.
 - ✅ Tenant-safety review: cross-tenant checks; policy denies audited; default 403 on missing/invalid claims
 
 ## 2. Scalability & Reliability
