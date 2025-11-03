@@ -50,11 +50,11 @@ resource "kubernetes_deployment" "ai_core" {
           }
           env {
             name  = "DATABASE_URL"
-            value = var.db_url
+            value = coalesce(var.db_url != "" ? var.db_url : null, local.db_url_vault, "")
           }
           env {
             name  = "REDIS_URL"
-            value = var.redis_url
+            value = coalesce(var.redis_url != "" ? var.redis_url : null, local.redis_url_vault, "")
           }
           env {
             name  = "QDRANT_URL"

@@ -68,3 +68,36 @@ variable "k8s_ca_crt" {
   description = "Kubernetes cluster CA certificate (PEM)"
 }
 
+# Secure inputs and Vault toggles
+variable "db_url" {
+  type        = string
+  description = "Database URL (prefer from Vault or TF_VAR_db_url)"
+  sensitive   = true
+  default     = ""
+}
+
+variable "redis_url" {
+  type        = string
+  description = "Redis URL (prefer from Vault or TF_VAR_redis_url)"
+  sensitive   = true
+  default     = ""
+}
+
+variable "use_vault" {
+  type        = bool
+  description = "Enable Vault provider to fetch secrets"
+  default     = false
+}
+
+variable "vault_addr" {
+  type        = string
+  description = "Vault address (e.g., https://vault.example.com)"
+  default     = ""
+}
+
+variable "vault_token" {
+  type        = string
+  description = "Vault token (use CI secret store)"
+  sensitive   = true
+  default     = ""
+}
