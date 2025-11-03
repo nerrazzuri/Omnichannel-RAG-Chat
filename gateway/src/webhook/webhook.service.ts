@@ -192,7 +192,10 @@ export class WebhookService {
       const aiCoreUrl = process.env.AI_CORE_URL || 'http://ai-core:8000';
       const headers: any = { 'Content-Type': 'application/json' };
       if (authHeader) headers['Authorization'] = authHeader;
-      if (claims?.tenant_id) headers['X-Tenant-ID'] = String(claims.tenant_id);
+      if (!claims?.tenant_id) {
+        throw new Error('Missing tenant in claims');
+      }
+      headers['X-Tenant-ID'] = String(claims.tenant_id);
       // Correlation can be set by proxy if available
       if (!headers['X-Correlation-ID']) {
         headers['X-Correlation-ID'] = (Math.random() + 1).toString(36).substring(2);
@@ -200,7 +203,7 @@ export class WebhookService {
       await axios.post(
         `${aiCoreUrl}/v1/query`,
         {
-          tenant_id: claims?.tenant_id || process.env.AUTH_BYPASS_TENANT || '00000000-0000-0000-0000-000000000001',
+          tenant_id: claims.tenant_id,
           channel: message.channel || 'web',
           message: message.content || '',
         },

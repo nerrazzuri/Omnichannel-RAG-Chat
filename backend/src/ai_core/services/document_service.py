@@ -43,6 +43,21 @@ def chunk_text(text: str, chunk_size: int = 700, overlap: int = 100) -> List[str
 class DocumentService:
     def __init__(self, db: Session):
         self.db = db
+        # Initialize OpenAI client lazily but ensure attributes exist
+        try:
+            from shared.security.secret_manager import secret_manager
+
+            api_key = secret_manager.get("OPENAI_API_KEY")
+        except Exception:
+            api_key = os.getenv("OPENAI_API_KEY")
+        try:
+            from openai import OpenAI as _OpenAI
+
+            self.client = _OpenAI(api_key=api_key) if api_key else None
+            self.openai_client = self.client if api_key else None
+        except Exception:
+            self.client = None
+            self.openai_client = None
 
     # ------------------------------
     # Normalized connector ingestion
@@ -61,6 +76,7 @@ class DocumentService:
 
         count = 0
         for rec in records:
+            trans = self.db.begin()
             try:
                 tenant_id = (
                     rec.tenant_id if hasattr(rec, "tenant_id") else rec.get("tenant_id")
@@ -133,21 +149,43 @@ class DocumentService:
                     embedding=None,
                     meta={"source": source_system},
                 )
+                # Embed connector chunk
+                try:
+                    vecs = self.embed([kc.content])
+                    if vecs:
+                        kc.embedding = vecs[0]
+                except Exception:
+                    pass
                 self.db.add(kc)
-                self.db.commit()
                 count += 1
-            except Exception:
-                self.db.rollback()
-                continue
-        return count
-        try:
-            from shared.security.secret_manager import secret_manager
+                # Best-effort upsert to vector store
+                try:
+                    from shared.vector.qdrant import qdrant_service
 
-            api_key = secret_manager.get("OPENAI_API_KEY")
-        except Exception:
-            api_key = os.getenv("OPENAI_API_KEY")
-        self.client = OpenAI(api_key=api_key) if api_key else None
-        self.openai_client = self.client if api_key else None
+                    qdrant_service.upsert_knowledge_chunks(
+                        tenant_id,
+                        [
+                            {
+                                "id": str(kc.id),
+                                "embedding": kc.embedding,
+                                "document_id": str(doc.id),
+                                "document_title": doc.title,
+                                "content": kc.content,
+                                "chunk_index": kc.chunk_index,
+                                "metadata": kc.meta or {},
+                            }
+                        ],
+                    )
+                except Exception:
+                    pass
+                trans.commit()
+            except Exception:
+                try:
+                    trans.rollback()
+                except Exception:
+                    pass
+                raise
+        return count
 
     @staticmethod
     def _split_sentences(text: str) -> List[str]:

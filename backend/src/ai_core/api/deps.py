@@ -20,9 +20,9 @@ def require(action: str, resource: Dict[str, Any] | None = None):
         db=Depends(get_db),
         request: Request = None,
     ) -> Dict[str, Any]:
-        # Temporary bypass ONLY in dev/local/test (set AUTH_ALLOW_ALL=1). Returns ADMIN claims.
+        # Temporary bypass ONLY in dev/local/test and when explicitly enabled (AUTH_BYPASS_ENABLE=1)
         env = os.getenv("ENV", "dev").lower()
-        if env in ("dev", "local", "test") and os.getenv("AUTH_ALLOW_ALL", "false").lower() in ("1", "true", "yes"):
+        if env in ("dev", "local", "test") and os.getenv("AUTH_ALLOW_ALL", "false").lower() in ("1", "true", "yes") and os.getenv("AUTH_BYPASS_ENABLE", "0") == "1":
             claims = {
                 "user_id": "dev-admin",
                 "tenant_id": os.getenv(

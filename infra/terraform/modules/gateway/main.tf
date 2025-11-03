@@ -47,7 +47,7 @@ resource "kubernetes_deployment" "gateway" {
           }
           liveness_probe {
             http_get {
-              path = "/v1/health"
+              path = "/api/health"
               port = 3001
             }
             initial_delay_seconds = 10
@@ -55,7 +55,7 @@ resource "kubernetes_deployment" "gateway" {
           }
           readiness_probe {
             http_get {
-              path = "/v1/ready"
+              path = "/api/ready"
               port = 3001
             }
             initial_delay_seconds = 10
