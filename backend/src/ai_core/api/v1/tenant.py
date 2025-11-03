@@ -9,6 +9,7 @@ from fastapi import (
     File,
     Form,
     Query,
+    Request,
 )
 from sqlalchemy.orm import Session
 from ai_core.models.knowledge import DocumentUploadRequest, DocumentUploadResponse
@@ -23,9 +24,14 @@ router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 @router.post("/upload", response_model=DocumentUploadResponse)
 def upload_document(
     body: DocumentUploadRequest,
+    request: Request,
     claims=Depends(require("ingestion:write", resource={"classification": "internal"})),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
+    # Enforce tenant header
+    header_tid = request.headers.get("X-Tenant-ID")
+    if not header_tid or str(header_tid) != str(body.tenant_id):
+        raise HTTPException(status_code=403, detail="Tenant header mismatch")
     # Cross-tenant enforcement
     if str(claims.get("role")) != "ADMIN" and str(body.tenant_id) != str(
         claims.get("tenant_id")
@@ -52,9 +58,15 @@ async def upload_document_file(
     knowledgeBaseId: str = Form("00000000-0000-0000-0000-000000000000"),
     jobId: str = Form(None),
     file: UploadFile = File(...),
+    request: Request = None,
     claims=Depends(require("ingestion:write", resource={"classification": "internal"})),
     db: Session = Depends(get_db),
 ):
+    # Enforce tenant header
+    if request:
+        header_tid = request.headers.get("X-Tenant-ID")
+        if not header_tid or str(header_tid) != str(tenantId):
+            raise HTTPException(status_code=403, detail="Tenant header mismatch")
     # Cross-tenant enforcement
     if str(claims.get("role")) != "ADMIN" and str(tenantId) != str(
         claims.get("tenant_id")

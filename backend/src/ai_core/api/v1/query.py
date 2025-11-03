@@ -34,6 +34,12 @@ def post_query(
             detail="Missing required fields: tenantId, message, channel",
         )
 
+    # Enforce tenant header + cross-tenant for non-admins
+    header_tid = request.headers.get("X-Tenant-ID")
+    if not header_tid:
+        raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
+    if str(header_tid) != str(payload.tenant_id):
+        raise HTTPException(status_code=403, detail="Tenant header mismatch")
     # Cross-tenant enforcement for non-admins
     try:
         if str(claims.get("role")) != "ADMIN" and str(payload.tenant_id) != str(
