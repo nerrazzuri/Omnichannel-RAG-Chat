@@ -138,8 +138,17 @@ export default function SuperAdmin() {
   };
 
   useEffect(() => {
-    // no auto-load token; user sets it
+    // Load tenants at startup
+    loadTenants();
   }, []);
+
+  useEffect(() => {
+    // Auto-load summary and approvals when tenant or config changes
+    if (tenantId) {
+      loadSummary();
+      loadApprovals();
+    }
+  }, [tenantId, cfg]);
 
   return (
     <div className="min-h-screen bg-gray-50">
