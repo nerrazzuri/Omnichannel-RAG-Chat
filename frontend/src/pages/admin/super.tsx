@@ -29,6 +29,9 @@ export default function SuperAdmin() {
   const [tenantInfo, setTenantInfo] = useState<any | null>(null);
   const [approvalsStats, setApprovalsStats] = useState<Record<string, number>>({});
   const [costSnapshot, setCostSnapshot] = useState<{ tokens_in: number; tokens_out: number; cost_cents: number } | null>(null);
+  const [gwHealth, setGwHealth] = useState<string>('unknown');
+  const [coreHealth, setCoreHealth] = useState<string>('unknown');
+  const [compliance, setCompliance] = useState<any | null>(null);
 
   const [newTenantName, setNewTenantName] = useState('');
   const [newTenantDomain, setNewTenantDomain] = useState('');
@@ -162,6 +165,24 @@ export default function SuperAdmin() {
   useEffect(() => {
     // Load tenants at startup
     loadTenants();
+    // Fetch service health on mount
+    (async () => {
+      try {
+        const { getGatewayHealth, getAiCoreHealth, getComplianceSummary } = await import('../../services/adminService');
+        const gh = await getGatewayHealth();
+        setGwHealth(gh.ok ? 'ready' : `err ${gh.status}`);
+        const ch = await getAiCoreHealth(apiBase);
+        setCoreHealth(ch.ok ? 'ready' : `err ${ch.status}`);
+        try {
+          const cs = await getComplianceSummary({ apiBase, token });
+          setCompliance(cs);
+        } catch (e) {
+          // ignore compliance errors in dev
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -268,6 +289,22 @@ export default function SuperAdmin() {
               <div className="border rounded p-3">
                 <div className="text-gray-500">Retention Policies</div>
                 <div className="mt-1">{retention.length} policies</div>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="border rounded p-3">
+                <div className="text-gray-500">Service Health</div>
+                <div className="mt-1">
+                  <div>Gateway: <span className={gwHealth==='ready' ? 'text-emerald-700' : 'text-rose-700'}>{gwHealth}</span></div>
+                  <div>AI-Core: <span className={coreHealth==='ready' ? 'text-emerald-700' : 'text-rose-700'}>{coreHealth}</span></div>
+                </div>
+              </div>
+              <div className="border rounded p-3 col-span-2">
+                <div className="text-gray-500">Compliance</div>
+                <div className="mt-1">
+                  <div>Latest Status: {compliance?.status ?? 'n/a'}</div>
+                  <div>Noncompliant Tenants: {compliance?.noncompliant_total ?? compliance?.non_compliant ?? 'n/a'}</div>
+                </div>
               </div>
             </div>
           </div>

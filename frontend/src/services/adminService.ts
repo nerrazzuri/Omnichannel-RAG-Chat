@@ -89,4 +89,22 @@ export async function updateRetentionPolicy(
   return r.json();
 }
 
+export async function getGatewayHealth(base='http://localhost:3001') {
+  const r = await fetch(`${base}/api/ready`);
+  return { ok: r.ok, status: r.status };
+}
+
+export async function getAiCoreHealth(baseApi: string) {
+  const r = await fetch(`${baseApi}/v1/ready`);
+  return { ok: r.ok, status: r.status };
+}
+
+export async function getComplianceSummary(cfg: AdminConfig) {
+  const r = await fetch(`${cfg.apiBase}/v1/admin/reports/summary`, {
+    headers: headers(cfg.token),
+  });
+  if (!r.ok) throw new Error(`compliance summary failed: ${r.status}`);
+  return r.json();
+}
+
 
