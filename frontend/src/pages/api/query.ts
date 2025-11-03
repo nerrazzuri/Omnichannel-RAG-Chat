@@ -10,30 +10,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const base = process.env.AI_CORE_URL || 'http://localhost:8000';
     const url = base.endsWith('/') ? `${base}v1/query` : `${base}/v1/query`;
 
+    // Require auth and tenant headers (or cookies) and forward them
+    const auth = (req.headers['authorization'] as string) || (req.cookies?.auth_token ? `Bearer ${req.cookies.auth_token}` : '');
+    const tenantId = (req.headers['x-tenant-id'] as string) || (req.cookies?.tenant_id as string);
+    if (!tenantId) {
+      res.status(400).json({ error: 'X-Tenant-ID header or tenant_id cookie required' });
+      return;
+    }
+    if (!auth) {
+      res.status(401).json({ error: 'Authorization required' });
+      return;
+    }
+
     const r = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': auth, 'X-Tenant-ID': tenantId },
       body: JSON.stringify(req.body),
     });
 
     const contentType = r.headers.get('content-type') || '';
-    if (!r.ok) {
-      const text = await r.text();
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(r.status).send(text);
-      return;
-    }
-
-    // Prefer JSON; return only the response field as plain text for UI readability
     if (contentType.includes('application/json')) {
       const data = await r.json();
-      const text = typeof data === 'string' ? data : (data.response ?? JSON.stringify(data));
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(200).send(text);
+      res.setHeader('Content-Type', 'application/json');
+      res.status(r.status).json(data);
     } else {
       const text = await r.text();
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.status(200).send(text);
+      res.status(r.status).send(text);
     }
   } catch (e: any) {
     res.status(500).json({ error: e.message });

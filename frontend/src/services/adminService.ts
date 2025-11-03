@@ -89,14 +89,16 @@ export async function updateRetentionPolicy(
   return r.json();
 }
 
-export async function getGatewayHealth(base='http://localhost:3001') {
-  const r = await fetch(`${base}/api/ready`);
-  return { ok: r.ok, status: r.status };
+export async function getGatewayHealth() {
+  const r = await fetch(`/api/health/gateway`);
+  const j = await r.json().catch(() => ({} as any));
+  return { ok: !!j.ok, status: j.status ?? r.status };
 }
 
-export async function getAiCoreHealth(baseApi: string) {
-  const r = await fetch(`${baseApi}/v1/ready`);
-  return { ok: r.ok, status: r.status };
+export async function getAiCoreHealth() {
+  const r = await fetch(`/api/health/ai_core`);
+  const j = await r.json().catch(() => ({} as any));
+  return { ok: !!j.ok, status: j.status ?? r.status };
 }
 
 export async function getComplianceSummary(cfg: AdminConfig) {
