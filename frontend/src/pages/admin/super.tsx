@@ -114,6 +114,19 @@ export default function SuperAdmin() {
     }
   };
 
+  const loadRetention = async () => {
+    setLoadingRetention(true);
+    setMsg('');
+    try {
+      const rows = await listRetentionPolicies(cfg, tenantId);
+      setRetention(rows);
+    } catch (e: any) {
+      setMsg(`Load retention failed: ${e.message || e}`);
+    } finally {
+      setLoadingRetention(false);
+    }
+  };
+
   const onRetentionSave = async (row: any) => {
     setMsg('');
     try {
