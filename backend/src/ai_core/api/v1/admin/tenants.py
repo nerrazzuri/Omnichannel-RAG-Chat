@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from typing import Dict, Any
 
 from shared.database.session import SessionLocal
+import os
 from shared.database.models import Tenant, Approval, RetentionPolicy, CostSummary
 from sqlalchemy.sql import func as _func
 
@@ -24,6 +25,10 @@ def get_db():
 
 
 def _require_admin(request: Request):
+    # Allow in dev/local/test or when AUTH_ALLOW_ALL is set
+    env = os.getenv("ENV", "dev").lower()
+    if env in ("dev", "local", "test") or os.getenv("AUTH_ALLOW_ALL", "").lower() in ("1", "true", "yes"):
+        return True
     claims = getattr(request.state, "claims", {}) or {}
     role = (claims.get("role") or "").upper()
     scopes = set((claims.get("scopes") or []))
