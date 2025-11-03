@@ -11,6 +11,7 @@ export default function MessageRenderer({ content }: { content: string }) {
     <div className="prose prose-sm max-w-none">
       <ReactMarkdown
         remarkPlugins={[remarkGfm as any]}
+        skipHtml
         components={{
           code: (props) => <CodeBlock {...props} /> as any,
           table: (props) => <div className="overflow-x-auto"><table {...props} /></div> as any,
