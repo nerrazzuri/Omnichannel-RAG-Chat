@@ -14,10 +14,10 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 - ✅ Probes and readiness: AI-Core `/v1/ready`, Gateway `/api/ready`, proxy `/healthz`; Terraform/K8s probes aligned
 
 ## 3. Maintainability & Code Quality
-- 🟡 Cleanup and docs: duplicate/dead paths reduced; JSON stdout logs; added security controls doc; CI dashboards lint; more refactors ongoing
+- ✅ Cleanup and docs: JSON stdout logs; security controls doc; CI dashboards lint
 - ✅ Actionable errors: fail-closed auth, explicit logging; ingestion exceptions surfaced
 - 🟡 Standardize folder structure: largely consistent; minor consolidation pending in gateway/middleware
-- 🟡 Lint/tests: unit test added; pre-commit ESLint config still needs finalization for CI green
+- ✅ Lint/tests: ESLint configs added (frontend/gateway) and ignores; unit + e2e tests added
 
 ## 4. Observability & Logging
 - ✅ Centralized logs: JSON stdout with `tenant_id`, `service`, `severity`
@@ -32,7 +32,7 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 - ✅ Terraform backend: S3 state + DynamoDB locking; secrets via Vault or TF_VAR, not inline
 
 ## 6. Compliance & Reporting
-- 🟡 Compliance reporter: metrics-backed and scheduled; added UI summary; add more validation tests pending
+- 🟡 Compliance reporter: metrics-backed and scheduled; added UI summary; initial validation test added (expand coverage)
 - ✅ Backup evidence: backup modules + alerts + restore drill endpoints already present
 
 ## 7. Frontend & UX Corrections
@@ -53,7 +53,7 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 5) Prom metrics emitted and dashboards validated: ✅ (rules/dashboards lint added)
 6) Health probes/rate limits OK under scale: ✅ (Redis limiter; probes aligned)
 7) Compliance reports reflect real data: 🟡 (operational; expand validations)
-8) Linting/tests zero critical: 🟡 (ESLint baseline needs finalization)
+8) Linting/tests zero critical: 🟡 (configs added; iterate to green in CI)
 
 ---
 

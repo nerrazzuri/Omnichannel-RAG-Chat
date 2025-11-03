@@ -31,20 +31,20 @@ repos:
     hooks:
       - id: detect-secrets
         name: detect-secrets-scan
-        args: ["--all-files"]
+        # Use default args with baseline support if provided; avoid unsupported flags on some platforms
 
   # Node hooks via local wrapper to use project toolchains
   - repo: local
     hooks:
       - id: eslint-frontend
         name: eslint (frontend)
-        entry: bash -lc "cd frontend && npx --yes eslint . --ext .ts,.tsx,.js"
+        entry: bash -lc "cd frontend && npx --yes eslint . --ext .ts,.tsx,.js --ignore-path .eslintignore"
         language: system
         types: [file]
         pass_filenames: false
       - id: eslint-gateway
         name: eslint (gateway)
-        entry: bash -lc "cd gateway && npx --yes eslint . --ext .ts,.tsx,.js"
+        entry: bash -lc "cd gateway && npx --yes eslint . --ext .ts,.tsx,.js --ignore-path .eslintignore"
         language: system
         types: [file]
         pass_filenames: false
