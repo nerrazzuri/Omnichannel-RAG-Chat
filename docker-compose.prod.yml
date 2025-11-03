@@ -14,6 +14,10 @@ secrets:
     file: ./secrets/postgres_password.txt
   redis_password:
     file: ./secrets/redis_password.txt
+  database_url:
+    file: ./secrets/database_url.txt
+  redis_url:
+    file: ./secrets/redis_url.txt
 
 volumes:
   postgres_data:
@@ -92,8 +96,8 @@ services:
     restart: unless-stopped
     environment:
       - ENV=prod
-      - DATABASE_URL=postgresql://chatbot_user:__REDACTED__@postgresql:5432/chatbot_prod
-      - REDIS_URL=redis://:__REDACTED__@redis:6379/0
+      - DATABASE_URL_FILE=/run/secrets/database_url
+      - REDIS_URL_FILE=/run/secrets/redis_url
       - QDRANT_URL=http://qdrant:6333
       - RAG_EMBED_MODEL=text-embedding-3-large
       - RAG_CHAT_MODEL=gpt-4o-mini
@@ -105,6 +109,8 @@ services:
     secrets:
       - jwt_secret
       - openai_api_key
+      - database_url
+      - redis_url
     networks:
       - backend_net
       - data_net

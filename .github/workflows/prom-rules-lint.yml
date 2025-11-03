@@ -1,0 +1,21 @@
+name: Prometheus Rules Lint
+
+on:
+  push:
+    paths:
+      - 'observability/prometheus/**/*.yaml'
+  pull_request:
+    paths:
+      - 'observability/prometheus/**/*.yaml'
+
+jobs:
+  promtool-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate Prometheus rules
+        run: |
+          docker run --rm -v "${{ github.workspace }}/observability/prometheus:/prom" prom/prometheus promtool check rules /prom/rules/*.yaml || exit 1
+
+
