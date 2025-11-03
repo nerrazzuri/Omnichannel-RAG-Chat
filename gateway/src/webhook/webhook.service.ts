@@ -201,15 +201,25 @@ export class WebhookService {
       if (!headers['X-Correlation-ID']) {
         headers['X-Correlation-ID'] = (Math.random() + 1).toString(36).substring(2);
       }
-      // Enqueue for background processing
-      await enqueueWebhook({
+      // Enqueue for background processing; on failure fallback synchronously or 503
+      const job = {
         headers,
         body: {
           tenant_id: claims.tenant_id,
           channel: message.channel || 'web',
           message: message.content || '',
         },
-      });
+      };
+      const ok = await enqueueWebhook(job);
+      if (!ok) {
+        // Graceful degradation: try sync forward; if fails, bubble 503
+        try {
+          await axios.post(`${aiCoreUrl}/v1/query`, job.body, { headers });
+        } catch (e) {
+          const err: any = e;
+          throw new Error(`Service unavailable: ${err?.message || 'queue+sync failed'}`);
+        }
+      }
     } catch (error) {
       this.logger.error('Failed to forward message to AI Core:', error);
     }

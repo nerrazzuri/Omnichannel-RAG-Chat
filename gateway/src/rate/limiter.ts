@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { getRedis } from '../redis/redis';
+import { rateLimitHits } from '../metrics/metrics';
 
 export function redisRateLimit(maxPerMinute: number) {
   return async function (req: Request, res: Response, next: NextFunction) {
@@ -14,6 +15,7 @@ export function redisRateLimit(maxPerMinute: number) {
         await r.expire(key, 60);
       }
       if (val > maxPerMinute) {
+        try { rateLimitHits.labels(req.path || '/').inc(); } catch {}
         return res.status(429).json({ detail: 'Rate limit exceeded' });
       }
       next();
