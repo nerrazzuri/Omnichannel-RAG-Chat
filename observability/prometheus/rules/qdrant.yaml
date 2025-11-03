@@ -1,0 +1,13 @@
+groups:
+  - name: qdrant.rules
+    rules:
+      - alert: QdrantNoScrape
+        expr: up{job="qdrant"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Qdrant exporter not reachable
+          description: Prometheus is not scraping Qdrant metrics.
+
+

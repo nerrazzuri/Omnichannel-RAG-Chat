@@ -50,11 +50,11 @@ resource "kubernetes_deployment" "ai_core" {
           }
           env {
             name  = "DATABASE_URL"
-            value = "postgresql://user:password@postgres:5432/omni"
+            value = var.db_url
           }
           env {
             name  = "REDIS_URL"
-            value = "redis://redis:6379/0"
+            value = var.redis_url
           }
           env {
             name  = "QDRANT_URL"
@@ -69,7 +69,7 @@ resource "kubernetes_deployment" "ai_core" {
           }
           readiness_probe {
             http_get {
-              path = "/v1/health"
+              path = "/v1/ready"
               port = 8000
             }
             initial_delay_seconds = 5
@@ -192,7 +192,7 @@ resource "kubernetes_deployment" "gateway" {
           }
           readiness_probe {
             http_get {
-              path = "/api/health"
+              path = "/api/ready"
               port = 3001
             }
             initial_delay_seconds = 5

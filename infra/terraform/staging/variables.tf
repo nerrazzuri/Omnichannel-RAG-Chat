@@ -41,6 +41,22 @@ variable "k8s_host" {
   description = "Kubernetes API server URL"
 }
 
+variable "tf_state_bucket" {
+  type        = string
+  description = "S3 bucket for Terraform remote state"
+}
+
+variable "tf_state_lock_table" {
+  type        = string
+  description = "DynamoDB table for Terraform state locking"
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region for backend and resources"
+  default     = "us-east-1"
+}
+
 variable "k8s_sa_jwt" {
   type        = string
   description = "Service account JWT for Vault Kubernetes auth"
