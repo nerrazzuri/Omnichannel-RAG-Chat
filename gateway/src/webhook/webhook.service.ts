@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import fetch from 'node-fetch';
+import axios from 'axios';
 
 @Injectable()
 export class WebhookService {
@@ -197,15 +197,15 @@ export class WebhookService {
       if (!headers['X-Correlation-ID']) {
         headers['X-Correlation-ID'] = (Math.random() + 1).toString(36).substring(2);
       }
-      await fetch(`${aiCoreUrl}/v1/query`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
+      await axios.post(
+        `${aiCoreUrl}/v1/query`,
+        {
           tenant_id: claims?.tenant_id || process.env.AUTH_BYPASS_TENANT || '00000000-0000-0000-0000-000000000001',
           channel: message.channel || 'web',
           message: message.content || '',
-        }),
-      });
+        },
+        { headers }
+      );
     } catch (error) {
       this.logger.error('Failed to forward message to AI Core:', error);
     }
