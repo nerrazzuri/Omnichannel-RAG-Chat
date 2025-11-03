@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 
@@ -56,6 +57,36 @@ def list_tenants(request: Request, db: Session = Depends(get_db)):
         }
 
     return [_row(t) for t in rows]
+
+
+class TenantCreateBody(BaseModel):
+    name: str
+    domain: str
+    subscription_tier: str | None = "BASIC"
+    settings: dict | None = None
+
+
+@router.post("/create")
+def create_tenant(body: TenantCreateBody, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    name = (body.name or "").strip()
+    domain = (body.domain or "").strip()
+    if not name or not domain:
+        raise HTTPException(status_code=400, detail="name and domain are required")
+    # enforce unique domain
+    existing = db.query(Tenant).filter(Tenant.domain == domain).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="domain already exists")
+    t = Tenant(
+        name=name,
+        domain=domain,
+        subscription_tier=body.subscription_tier or "BASIC",
+        settings=body.settings or {},
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return {"id": str(t.id)}
 
 
 @router.get("/summary")
