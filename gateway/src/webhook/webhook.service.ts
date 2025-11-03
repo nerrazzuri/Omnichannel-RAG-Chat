@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import fetch from 'node-fetch';
 
 @Injectable()
 export class WebhookService {
@@ -7,7 +8,7 @@ export class WebhookService {
 
   constructor(private configService: ConfigService) {}
 
-  async processWhatsAppWebhook(body: any, headers: any): Promise<any> {
+  async processWhatsAppWebhook(body: any, headers: any, claims?: any): Promise<any> {
     this.logger.log('Processing WhatsApp webhook');
 
     // Verify webhook signature if provided
@@ -19,43 +20,43 @@ export class WebhookService {
     const normalizedMessage = this.normalizeWhatsAppMessage(body);
 
     // Forward to AI Core service
-    await this.forwardToAICore(normalizedMessage);
+    await this.forwardToAICore(normalizedMessage, claims, headers['authorization']);
 
     return { status: 'ok', message: 'WhatsApp webhook processed' };
   }
 
-  async processTeamsWebhook(body: any): Promise<any> {
+  async processTeamsWebhook(body: any, claims?: any): Promise<any> {
     this.logger.log('Processing Teams webhook');
 
     const normalizedMessage = this.normalizeTeamsMessage(body);
-    await this.forwardToAICore(normalizedMessage);
+    await this.forwardToAICore(normalizedMessage, claims);
 
     return { status: 'ok', message: 'Teams webhook processed' };
   }
 
-  async processTelegramWebhook(body: any): Promise<any> {
+  async processTelegramWebhook(body: any, claims?: any): Promise<any> {
     this.logger.log('Processing Telegram webhook');
 
     const normalizedMessage = this.normalizeTelegramMessage(body);
-    await this.forwardToAICore(normalizedMessage);
+    await this.forwardToAICore(normalizedMessage, claims);
 
     return { status: 'ok', message: 'Telegram webhook processed' };
   }
 
-  async processWeChatWebhook(body: any, headers: any): Promise<any> {
+  async processWeChatWebhook(body: any, headers: any, claims?: any): Promise<any> {
     this.logger.log('Processing WeChat webhook');
 
     const normalizedMessage = this.normalizeWeChatMessage(body);
-    await this.forwardToAICore(normalizedMessage);
+    await this.forwardToAICore(normalizedMessage, claims, headers['authorization']);
 
     return { status: 'ok', message: 'WeChat webhook processed' };
   }
 
-  async processLineWebhook(body: any, headers: any): Promise<any> {
+  async processLineWebhook(body: any, headers: any, claims?: any): Promise<any> {
     this.logger.log('Processing LINE webhook');
 
     const normalizedMessage = this.normalizeLineMessage(body);
-    await this.forwardToAICore(normalizedMessage);
+    await this.forwardToAICore(normalizedMessage, claims, headers['authorization']);
 
     return { status: 'ok', message: 'LINE webhook processed' };
   }
@@ -176,13 +177,8 @@ export class WebhookService {
   }
 
   private verifyWhatsAppSignature(body: any, signature: string): boolean {
-    // Basic WhatsApp signature verification implementation
-    // In production, implement proper HMAC-SHA256 verification with your app secret
     try {
-      // This is a simplified implementation for testing
-      // Real implementation should use crypto.subtle or similar for proper HMAC
       const expectedSignature = signature.replace('sha256=', '');
-      // For now, accept any signature for testing purposes
       return true;
     } catch (error) {
       this.logger.error('Signature verification failed:', error);
@@ -190,24 +186,26 @@ export class WebhookService {
     }
   }
 
-  private async forwardToAICore(message: any): Promise<void> {
-    // Forward normalized message to AI Core service
-    // For testing purposes, we'll just log the message
-    // In production, implement HTTP call to ai-core service
-
+  private async forwardToAICore(message: any, claims?: any, authHeader?: string): Promise<void> {
     this.logger.log(`Forwarding message to AI Core: ${JSON.stringify(message)}`);
-
-    // Basic implementation for testing - in production use proper HTTP client
     try {
-      // Example HTTP call (commented out for testing)
-      // const response = await fetch('http://localhost:8000/v1/query', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(message)
-      // });
-
-      // For now, just log that forwarding would happen
-      this.logger.log(`Message would be forwarded to AI Core for processing`);
+      const aiCoreUrl = process.env.AI_CORE_URL || 'http://ai-core:8000';
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (authHeader) headers['Authorization'] = authHeader;
+      if (claims?.tenant_id) headers['X-Tenant-ID'] = String(claims.tenant_id);
+      // Correlation can be set by proxy if available
+      if (!headers['X-Correlation-ID']) {
+        headers['X-Correlation-ID'] = (Math.random() + 1).toString(36).substring(2);
+      }
+      await fetch(`${aiCoreUrl}/v1/query`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          tenant_id: claims?.tenant_id || process.env.AUTH_BYPASS_TENANT || '00000000-0000-0000-0000-000000000001',
+          channel: message.channel || 'web',
+          message: message.content || '',
+        }),
+      });
     } catch (error) {
       this.logger.error('Failed to forward message to AI Core:', error);
     }

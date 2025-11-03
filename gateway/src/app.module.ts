@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { WebhookModule } from './webhook/webhook.module';
 import { HealthModule } from './health/health.module';
+import { MetricsController } from './metrics/metrics.controller';
 
 @Module({
   imports: [
@@ -12,7 +13,7 @@ import { HealthModule } from './health/health.module';
     WebhookModule,
     HealthModule,
   ],
-  controllers: [],
+  controllers: [MetricsController],
   providers: [],
 })
 export class AppModule {}

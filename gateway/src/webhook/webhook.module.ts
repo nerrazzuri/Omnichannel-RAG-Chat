@@ -5,6 +5,5 @@ import { WebhookService } from './webhook.service';
 @Module({
   controllers: [WebhookController],
   providers: [WebhookService],
-  exports: [WebhookService],
 })
 export class WebhookModule {}
