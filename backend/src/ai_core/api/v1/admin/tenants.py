@@ -8,6 +8,7 @@ from shared.database.session import SessionLocal
 import os
 from shared.database.models import Tenant, Approval, RetentionPolicy, CostSummary
 from sqlalchemy.sql import func as _func
+from sqlalchemy import text as _sql
 
 
 router = APIRouter(prefix="/v1/admin/tenants", tags=["admin-tenants"])
@@ -76,17 +77,36 @@ def tenant_summary(tenant_id: str, request: Request, db: Session = Depends(get_d
         .all()
     )
     approvals_by_status = {str(status): int(cnt) for status, cnt in rows}
-    queue_size = (
-        db.query(_func.count(Approval.id))
-        .filter(
-            Approval.tenant_id == tenant_id,
-            Approval.status == "approved",
-            Approval.executed == False,
-            Approval.deleted_at == None,
+    # Queue size (handle legacy schemas without executed/deleted_at)
+    try:
+        cols = []
+        try:
+            rows = db.execute(
+                _sql(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='approvals'"
+                )
+            ).fetchall()
+            cols = [r[0] for r in rows]
+            if not cols:
+                rows2 = db.execute(
+                    _sql(
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='approvals'"
+                    )
+                ).fetchall()
+                cols = [r[0] for r in rows2]
+        except Exception:
+            cols = []
+
+        q = db.query(_func.count(Approval.id)).filter(
+            Approval.tenant_id == tenant_id, Approval.status == "approved"
         )
-        .scalar()
-        or 0
-    )  # noqa: E712
+        if "executed" in cols:
+            q = q.filter(Approval.executed == False)  # noqa: E712
+        if "deleted_at" in cols:
+            q = q.filter(Approval.deleted_at == None)  # noqa: E711
+        queue_size = int(q.scalar() or 0)
+    except Exception:
+        queue_size = 0
 
     # Retention policies
     policies = (
