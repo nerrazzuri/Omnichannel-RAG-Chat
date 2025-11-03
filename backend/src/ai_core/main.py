@@ -18,6 +18,7 @@ from ai_core.api.v1.tenant import router as tenant_router
 from .api.v1.reranker import router as reranker_router
 from ai_core.api.v1.admin.api_keys import router as apikey_router
 from ai_core.api.v1.admin.rerank import router as rerank_admin_router
+from ai_core.api.v1.admin.features import router as features_admin_router
 from ai_core.api.v1.admin.backup import router as backup_admin_router
 from ai_core.api.v1.admin.restore import router as restore_admin_router
 from ai_core.api.v1.admin.retention import router as retention_admin_router
@@ -762,6 +763,7 @@ app.include_router(approvals_router)
 app.include_router(backup_admin_router)
 app.include_router(restore_admin_router)
 app.include_router(retention_admin_router)
+app.include_router(features_admin_router)
 app.include_router(compliance_admin_router)
 
 if __name__ == "__main__":

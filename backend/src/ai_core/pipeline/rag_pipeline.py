@@ -261,7 +261,39 @@ class RAGPipeline:
             except Exception:
                 self.log.warning("structured executor path failed; falling back")
 
+        # Optional web-search fallback if tenant enabled and retrieval is empty
         ctx_texts = self.context_builder.build(reranked_docs)
+        if not ctx_texts and db:
+            try:
+                from shared.database.models import Tenant as _Tenant
+                t = db.query(_Tenant).filter(_Tenant.id == tenant_id).first()
+                settings = (t.settings or {}) if t else {}
+                if bool(settings.get("web_search_enabled", False)):
+                    from ai_core.services.web_search import search as websearch
+
+                    hits = websearch(query, max_results=3)
+                    if hits:
+                        # Build snippets from web results
+                        structured_snippets = []
+                        for i, h in enumerate(hits, start=1):
+                            structured_snippets.append(
+                                {
+                                    "id": f"S{i}",
+                                    "source_label": h.get("title") or f"Web {i}",
+                                    "text": h.get("snippet") or "",
+                                    "doc": {
+                                        "document_id": None,
+                                        "title": h.get("title"),
+                                        "source_url": h.get("link"),
+                                    },
+                                }
+                            )
+                        payload = self.response_formatter.generate(
+                            query, structured_snippets, intent=intent, tenant_id=tenant_id
+                        )
+                        return payload
+            except Exception:
+                pass
         # Prepend memory summary and recent exchanges to context (lightweight)
         memory_block: List[str] = []
         if memory_summary:
