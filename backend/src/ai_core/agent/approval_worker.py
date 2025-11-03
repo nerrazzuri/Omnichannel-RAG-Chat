@@ -4,6 +4,7 @@ import time
 import hashlib
 from typing import Dict
 from sqlalchemy.orm import Session
+from sqlalchemy import text as _sql
 import logging
 from sqlalchemy import and_
 from shared.database.session import SessionLocal
@@ -19,29 +20,43 @@ def _h(text: str) -> str:
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
-def process_once(db: Session, batch_size: int) -> int:
-    rows = (
-        db.query(Approval)
-        .filter(
-            and_(
-                Approval.status == "approved",
-                Approval.executed == False,
-                Approval.deleted_at == None,
+def _list_columns(db: Session) -> set[str]:
+    try:
+        rs = db.execute(
+            _sql(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name='approvals'"
             )
-        )  # noqa: E712
-        .order_by(Approval.created_at.asc())
-        .limit(max(1, int(batch_size)))
-        .all()
+        ).fetchall()
+        return {r[0] for r in rs}
+    except Exception:
+        return set()
+
+
+def _fetch_approvals(db: Session, batch_size: int):
+    cols = _list_columns(db)
+    base_cols = ["id", "tenant_id", "tool_id", "created_at"]
+    sel_cols = [c for c in base_cols if c in cols]
+    if "action_payload_json" in cols:
+        sel_cols.append("action_payload_json")
+    sql = _sql(
+        f"SELECT {', '.join(sel_cols)} FROM approvals WHERE status = :st AND executed = false AND deleted_at IS NULL ORDER BY created_at ASC LIMIT :lim"
     )
+    rows = db.execute(sql, {"st": "approved", "lim": max(1, int(batch_size))}).mappings().all()
+    return rows, ("action_payload_json" in sel_cols)
+
+
+def process_once(db: Session, batch_size: int) -> int:
+    # Use raw SQL with dynamic columns to avoid crashes on older schemas
+    rows, has_payload = _fetch_approvals(db, batch_size)
     approval_metrics.set_queue(len(rows))
     processed = 0
     for rec in rows:
         t0 = time.time()
         try:
-            tool = tool_registry.get(rec.tool_id)
+            tool = tool_registry.get(rec["tool_id"])
             if not tool:
                 raise RuntimeError("unknown_tool")
-            payload_str = rec.action_payload_json or "{}"
+            payload_str = (rec.get("action_payload_json") if has_payload else None) or "{}"
             # naive json parse fallback
             try:
                 import json as _json
@@ -57,24 +72,23 @@ def process_once(db: Session, batch_size: int) -> int:
                     extra={"approval_id": str(rec.id)},
                 )
                 payload = {}
-            res = tool.execute(
-                tenant_id=str(rec.tenant_id), api_key_id=None, payload=payload
-            )
+            res = tool.execute(tenant_id=str(rec["tenant_id"]), api_key_id=None, payload=payload)
             out_sum = {k: v for k, v in res.items() if k != "status"}
             out_sum_str = str(out_sum)[:1000]
-            rec.executed = True
-            rec.executed_at = db.execute("SELECT now()").scalar()  # portable now()
-            rec.output_summary = out_sum_str
-            rec.output_hash = _h(out_sum_str)
-            db.add(rec)
+            db.execute(
+                _sql(
+                    "UPDATE approvals SET executed=true, executed_at=now(), output_summary=:s, output_hash=:h WHERE id=:id"
+                ),
+                {"s": out_sum_str, "h": _h(out_sum_str), "id": str(rec["id"])},
+            )
             db.commit()
             approval_metrics.inc_success()
             write_audit(
                 db,
-                str(rec.tenant_id),
+                str(rec["tenant_id"]),
                 None,
                 "agent.approval.execute",
-                rec.tool_id,
+                rec["tool_id"],
                 redact(payload_str),
                 redact(out_sum_str),
                 True,
@@ -92,7 +106,7 @@ def process_once(db: Session, batch_size: int) -> int:
             approval_metrics.observe_latency_ms(int((time.time() - t0) * 1000))
             logging.getLogger(__name__).exception(
                 "[approval_worker.process] execution error",
-                extra={"approval_id": str(rec.id), "tool": rec.tool_id},
+                extra={"approval_id": str(rec.get("id")), "tool": rec.get("tool_id")},
             )
             # simple retry jitter handled by outer loop cadence
             continue
