@@ -1,0 +1,22 @@
+groups:
+  - name: gateway.queue
+    rules:
+      - alert: GatewayHighRateLimitHits
+        expr: sum(increase(gateway_rate_limit_hits_total[5m])) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: High rate limit hits on gateway
+          description: More than 100 rate limit hits in 5m window.
+
+      - alert: GatewayDLQNotEmpty
+        expr: increase(gateway_queue_dlq_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Gateway DLQ receiving messages
+          description: Webhook DLQ is receiving messages; inspect queue and worker.
+
+

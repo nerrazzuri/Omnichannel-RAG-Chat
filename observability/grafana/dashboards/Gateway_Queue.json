@@ -1,0 +1,27 @@
+{
+  "title": "Gateway Queue & Rate",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Rate Limit Hits",
+      "targets": [{ "expr": "sum(rate(gateway_rate_limit_hits_total[5m]))" }]
+    },
+    {
+      "type": "graph",
+      "title": "Queue Enqueued",
+      "targets": [{ "expr": "sum(rate(gateway_queue_enqueued_total[5m]))" }]
+    },
+    {
+      "type": "graph",
+      "title": "Queue Failures",
+      "targets": [{ "expr": "sum(rate(gateway_queue_failed_total[5m]))" }]
+    },
+    {
+      "type": "graph",
+      "title": "DLQ Events",
+      "targets": [{ "expr": "sum(rate(gateway_queue_dlq_total[5m]))" }]
+    }
+  ]
+}
+
+

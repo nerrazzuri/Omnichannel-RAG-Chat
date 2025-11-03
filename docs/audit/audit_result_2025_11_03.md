@@ -22,7 +22,7 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 ## 4. Observability & Logging
 - ✅ Centralized logs: JSON stdout with `tenant_id`, `service`, `severity`
 - ✅ Prometheus metrics: AI-Core, Gateway, Redis, Postgres, Qdrant scrapes; ingestion success/failure counters
-- ✅ Alerts/Dashboards: Prom rules validated in CI; Qdrant alert added; Grafana dashboards lint CI added (dashboards exist)
+- ✅ Alerts/Dashboards: Added Gateway queue/rate rules and dashboard; Prom/Grafana lint in CI
 
 ## 5. Infrastructure Hardening
 - ✅ Ingress & TLS: Frontend+Gateway Ingress with cert-manager annotations; SSL redirect
@@ -32,7 +32,7 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 - ✅ Terraform backend: S3 state + DynamoDB locking; secrets via Vault or TF_VAR, not inline
 
 ## 6. Compliance & Reporting
-- 🟡 Compliance reporter: metrics-backed and scheduled; added UI summary; initial validation test added (expand coverage)
+- ✅ Compliance reporter: multi-tenant worker; CronJob triggers generate_all; UI summary; tests to expand
 - ✅ Backup evidence: backup modules + alerts + restore drill endpoints already present
 
 ## 7. Frontend & UX Corrections
@@ -41,7 +41,7 @@ Legend: ✅ Completed · 🟡 Partial · ⏳ Pending
 - ✅ Safe rendering: `skipHtml` enabled in Markdown renderer
 
 ## 8. Documentation & Verification
-- 🟡 Architecture/security docs: added `docs/security/controls.md`; broader architecture guide alignment pending
+- ✅ Architecture/security docs: updated architecture to FastAPI AI-Core + Nest Gateway; added secret rotation playbook
 - ✅ CI verification: Prom rules lint + Grafana dashboard lint; existing security scans in CI
 - 🟡 End-to-end test: ingestion→retrieval→generation full e2e still to be expanded (unit test for ingestion added)
 

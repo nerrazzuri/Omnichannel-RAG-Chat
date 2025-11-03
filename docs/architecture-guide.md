@@ -98,16 +98,13 @@ enum ChannelType {
 
 ### 5. Scalable Architecture
 
-**Microservices Design**:
+**Service Topology**:
 ```
 omnichannel-rag-platform/
-├── api-gateway/           # Rate limiting, routing, auth
-├── conversation-service/  # Message handling, context management
-├── knowledge-service/     # RAG pipeline, vector operations
-├── tenant-service/        # Multi-tenant configuration
-├── channel-adapters/      # Platform-specific integrations
-├── analytics-service/     # Usage metrics, performance monitoring
-└── notification-service/  # Alerts, system notifications
+├── gateway/               # NestJS: auth, rate limits, webhooks, queue
+├── backend/               # FastAPI: RAG, compliance, retention, admin APIs
+├── observability/         # Prometheus/Grafana rules & dashboards
+└── infra/                 # Kubernetes manifests & Terraform modules
 ```
 
 **Scaling Strategies**:
@@ -118,12 +115,11 @@ omnichannel-rag-platform/
 
 ## Technology Stack
 
-### Backend Services
-- **Runtime**: Node.js 20+ with TypeScript
-- **Framework**: NestJS for enterprise-grade structure
-- **Database**: PostgreSQL 15+ with PgBouncer connection pooling
-- **Cache**: Redis Cluster for session management and caching
-- **Message Queue**: RabbitMQ for reliable message delivery
+### Backend Services (Current)
+- **AI-Core**: FastAPI (Python 3.11); RAG pipeline, compliance, retention, Vault client
+- **Gateway**: NestJS (Node 20); auth, rate limiting, webhook adapters, S2S forwarding
+- **Database**: PostgreSQL 15+
+- **Cache/Queue**: Redis (rate-limit counters, webhook retry queue)
 
 ### AI/ML Integration
 - **RAG Framework**: LangChain for pipeline orchestration

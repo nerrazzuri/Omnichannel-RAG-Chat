@@ -1,0 +1,13 @@
+groups:
+  - name: gateway.auth
+    rules:
+      - alert: GatewayAuthFailuresSpike
+        expr: sum(increase(gateway_jwt_auth_failures_total[10m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: JWT auth failures elevated
+          description: Authentication failures exceeded 20 in 10 minutes.
+
+

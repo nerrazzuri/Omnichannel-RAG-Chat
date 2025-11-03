@@ -33,10 +33,10 @@ spec:
               args:
                 - |
                   set -euo pipefail
-                  curl -sS -X POST "http://ai-core:8000/v1/admin/reports/generate" \
+                  curl -sS -X POST "http://ai-core:8000/v1/admin/reports/generate_all" \
                     -H "Authorization: Bearer ${ADMIN_UPLOAD_BEARER}" \
                     -H "Content-Type: application/json" \
-                    -d '{"tenant_id":"00000000-0000-0000-0000-000000000001"}'
+                    -d '{}'
               resources:
                 requests:
                   cpu: "50m"

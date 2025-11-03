@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from shared.database.session import SessionLocal
-from shared.database.models import ComplianceReport
+from shared.database.models import ComplianceReport, Tenant
 from shared.config.tuning import compliance as compliance_cfg
 from ai_core.services.compliance_reporter import ComplianceReporter
 from ai_core.pipeline.audit_service import write_audit
@@ -111,4 +111,18 @@ def generate(body: GenerateBody, request: Request, db: Session = Depends(get_db)
         "scores": result.get("scores"),
     }
 
+
+@router.post("/generate_all")
+def generate_all(request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    reporter = ComplianceReporter()
+    tenants = [str(t[0]) for t in db.query(Tenant.id).all()]
+    out = []
+    for tid in tenants:
+        try:
+            result = reporter.generate_for_tenant(db, tid)
+            out.append({"tenant_id": tid, "ok": True, "checksum": result.get("checksum")})
+        except Exception as _e:
+            out.append({"tenant_id": tid, "ok": False, "error": str(_e)})
+    return {"results": out}
 
