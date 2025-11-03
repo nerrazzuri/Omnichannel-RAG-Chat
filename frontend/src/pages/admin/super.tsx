@@ -6,6 +6,8 @@ import {
   decideApproval,
   listRetentionPolicies,
   updateRetentionPolicy,
+  listTenants,
+  getTenantSummary,
 } from '../../services/adminService';
 
 export default function SuperAdmin() {
@@ -21,6 +23,11 @@ export default function SuperAdmin() {
   const [retention, setRetention] = useState<any[]>([]);
   const [loadingRetention, setLoadingRetention] = useState(false);
   const [msg, setMsg] = useState<string>('');
+  const [tenants, setTenants] = useState<any[]>([]);
+  const [loadingTenants, setLoadingTenants] = useState(false);
+  const [tenantInfo, setTenantInfo] = useState<any | null>(null);
+  const [approvalsStats, setApprovalsStats] = useState<Record<string, number>>({});
+  const [costSnapshot, setCostSnapshot] = useState<{ tokens_in: number; tokens_out: number; cost_cents: number } | null>(null);
 
   const loadFeatures = async () => {
     setLoadingFeatures(true);
@@ -45,6 +52,36 @@ export default function SuperAdmin() {
       setMsg(`Save features failed: ${e.message || e}`);
     } finally {
       setLoadingFeatures(false);
+    }
+  };
+
+  const loadTenants = async () => {
+    setLoadingTenants(true);
+    setMsg('');
+    try {
+      const rows = await listTenants(cfg);
+      setTenants(rows);
+      if (rows?.length && !tenantId) {
+        setTenantId(rows[0].id);
+      }
+    } catch (e: any) {
+      setMsg(`Load tenants failed: ${e.message || e}`);
+    } finally {
+      setLoadingTenants(false);
+    }
+  };
+
+  const loadSummary = async () => {
+    setMsg('');
+    try {
+      const sum = await getTenantSummary(cfg, tenantId);
+      setTenantInfo(sum.tenant);
+      setWebSearchEnabled(!!sum.features?.web_search_enabled);
+      setApprovalsStats(sum.approvals?.by_status || {});
+      setCostSnapshot(sum.cost || null);
+      setRetention(sum.retention || []);
+    } catch (e: any) {
+      setMsg(`Load summary failed: ${e.message || e}`);
     }
   };
 
@@ -117,7 +154,18 @@ export default function SuperAdmin() {
             <label className="block text-sm text-gray-600">Bearer Token</label>
             <input className="w-full border rounded px-3 py-2 mb-2" value={token} onChange={(e) => setToken(e.target.value)} placeholder="paste admin JWT/API key here" />
             <label className="block text-sm text-gray-600">Tenant ID</label>
-            <input className="w-full border rounded px-3 py-2" value={tenantId} onChange={(e) => setTenantId(e.target.value)} />
+            <div className="flex gap-2 items-center">
+              <select className="flex-1 border rounded px-3 py-2" value={tenantId} onChange={(e) => setTenantId(e.target.value)}>
+                {tenantId && !tenants.some((t) => t.id === tenantId) && (
+                  <option value={tenantId}>{tenantId}</option>
+                )}
+                {tenants.map((t: any) => (
+                  <option key={t.id} value={t.id}>{t.name || t.domain || t.id}</option>
+                ))}
+              </select>
+              <button onClick={loadTenants} disabled={loadingTenants} className="px-3 py-2 text-sm rounded border bg-white hover:bg-gray-50">Load Tenants</button>
+              <button onClick={loadSummary} className="px-3 py-2 text-sm rounded border bg-white hover:bg-gray-50">Load Summary</button>
+            </div>
           </div>
 
           <div className="bg-white border border-gray-200 rounded-lg p-4">
@@ -132,6 +180,42 @@ export default function SuperAdmin() {
             </div>
           </div>
         </div>
+
+        {tenantInfo && (
+          <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
+            <h2 className="font-medium mb-3">Tenant Overview</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div><div className="text-gray-500">Name</div><div className="font-medium">{tenantInfo.name}</div></div>
+              <div><div className="text-gray-500">Domain</div><div className="font-medium">{tenantInfo.domain}</div></div>
+              <div><div className="text-gray-500">Tier</div><div className="font-medium">{tenantInfo.subscription_tier}</div></div>
+              <div><div className="text-gray-500">Created</div><div>{tenantInfo.created_at}</div></div>
+              <div><div className="text-gray-500">Updated</div><div>{tenantInfo.updated_at}</div></div>
+              <div><div className="text-gray-500">Web Search</div><div className="font-medium">{webSearchEnabled ? 'Enabled' : 'Disabled'}</div></div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+              <div className="border rounded p-3">
+                <div className="text-gray-500">Approvals</div>
+                <div className="mt-1">
+                  <div>Pending: {approvalsStats['pending'] || 0}</div>
+                  <div>Approved: {approvalsStats['approved'] || 0}</div>
+                  <div>Denied: {approvalsStats['denied'] || 0}</div>
+                </div>
+              </div>
+              <div className="border rounded p-3">
+                <div className="text-gray-500">Cost (7d)</div>
+                <div className="mt-1">
+                  <div>Tokens In: {costSnapshot?.tokens_in ?? 0}</div>
+                  <div>Tokens Out: {costSnapshot?.tokens_out ?? 0}</div>
+                  <div>Cost: ${(Math.round(((costSnapshot?.cost_cents ?? 0) / 100) * 100) / 100).toFixed(2)}</div>
+                </div>
+              </div>
+              <div className="border rounded p-3">
+                <div className="text-gray-500">Retention Policies</div>
+                <div className="mt-1">{retention.length} policies</div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
           <div className="flex items-center justify-between mb-3">

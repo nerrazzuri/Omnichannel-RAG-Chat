@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+from typing import Dict, Any
+
+from shared.database.session import SessionLocal
+from shared.database.models import Tenant, Approval, RetentionPolicy, CostSummary
+from sqlalchemy.sql import func as _func
+
+
+router = APIRouter(prefix="/v1/admin/tenants", tags=["admin-tenants"])
+
+
+def get_db():
+    s = SessionLocal()
+    try:
+        yield s
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _require_admin(request: Request):
+    claims = getattr(request.state, "claims", {}) or {}
+    role = (claims.get("role") or "").upper()
+    scopes = set((claims.get("scopes") or []))
+    if role == "ADMIN" or "governance:read" in scopes or "governance:write" in scopes:
+        return True
+    raise HTTPException(status_code=403, detail="forbidden")
+
+
+@router.get("/list")
+def list_tenants(request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    rows = db.query(Tenant).order_by(Tenant.created_at.asc()).all()
+
+    def _row(t: Tenant) -> Dict[str, Any]:
+        settings = t.settings or {}
+        return {
+            "id": str(t.id),
+            "name": t.name,
+            "domain": t.domain,
+            "subscription_tier": t.subscription_tier,
+            "web_search_enabled": bool(settings.get("web_search_enabled", False)),
+            "created_at": str(t.created_at) if t.created_at else None,
+            "updated_at": str(t.updated_at) if t.updated_at else None,
+        }
+
+    return [_row(t) for t in rows]
+
+
+@router.get("/summary")
+def tenant_summary(tenant_id: str, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    t = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="tenant not found")
+
+    # Features
+    settings = t.settings or {}
+    features = {"web_search_enabled": bool(settings.get("web_search_enabled", False))}
+
+    # Approvals stats
+    rows = (
+        db.query(Approval.status, _func.count(Approval.id))
+        .filter(Approval.tenant_id == tenant_id)
+        .group_by(Approval.status)
+        .all()
+    )
+    approvals_by_status = {str(status): int(cnt) for status, cnt in rows}
+    queue_size = (
+        db.query(_func.count(Approval.id))
+        .filter(
+            Approval.tenant_id == tenant_id,
+            Approval.status == "approved",
+            Approval.executed == False,
+            Approval.deleted_at == None,
+        )
+        .scalar()
+        or 0
+    )  # noqa: E712
+
+    # Retention policies
+    policies = (
+        db.query(RetentionPolicy)
+        .filter(RetentionPolicy.tenant_id == tenant_id)
+        .order_by(RetentionPolicy.data_type.asc())
+        .all()
+    )
+    retention = [
+        {
+            "data_type": p.data_type,
+            "max_age_days": p.max_age_days,
+            "archive_before_delete": bool(p.archive_before_delete),
+            "encryption_required": bool(p.encryption_required),
+            "last_enforced_at": str(p.last_enforced_at) if p.last_enforced_at else None,
+        }
+        for p in policies
+    ]
+
+    # Simple cost snapshot (sum over last 7 days)
+    try:
+        from datetime import datetime, timedelta
+
+        window_start = datetime.utcnow() - timedelta(days=7)
+        cs_rows = (
+            db.query(
+                _func.coalesce(_func.sum(CostSummary.tokens_in), 0),
+                _func.coalesce(_func.sum(CostSummary.tokens_out), 0),
+                _func.coalesce(_func.sum(CostSummary.cost_usd), 0),
+            )
+            .filter(CostSummary.tenant_id == tenant_id, CostSummary.window_start >= window_start)
+            .one()
+        )
+        cost_snapshot = {
+            "tokens_in": int(cs_rows[0] or 0),
+            "tokens_out": int(cs_rows[1] or 0),
+            "cost_cents": int(cs_rows[2] or 0),
+        }
+    except Exception:
+        cost_snapshot = {"tokens_in": 0, "tokens_out": 0, "cost_cents": 0}
+
+    return {
+        "tenant": {
+            "id": str(t.id),
+            "name": t.name,
+            "domain": t.domain,
+            "subscription_tier": t.subscription_tier,
+            "created_at": str(t.created_at) if t.created_at else None,
+            "updated_at": str(t.updated_at) if t.updated_at else None,
+        },
+        "features": features,
+        "approvals": {"by_status": approvals_by_status, "queue_size": int(queue_size)},
+        "retention": retention,
+        "cost": cost_snapshot,
+    }
+
+
