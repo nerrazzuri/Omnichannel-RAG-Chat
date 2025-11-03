@@ -12,4 +12,12 @@ scrape_configs:
       - targets: ['gateway:3001']
     metrics_path: /api/metrics
 
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
 

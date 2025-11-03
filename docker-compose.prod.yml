@@ -166,5 +166,31 @@ services:
       - gateway
     ports:
       - "9090:9090"
+    
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+      # Set REDIS_PASSWORD via environment or remove if not required
+    networks:
+      - data_net
+    depends_on:
+      - redis
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    restart: unless-stopped
+    environment:
+      # Provide DSN via environment or Docker secret mounted to file and sourced via entrypoint script
+      - DATA_SOURCE_URI=postgresql://chatbot_user@postgresql:5432/chatbot_prod?sslmode=disable
+      - DATA_SOURCE_USER=chatbot_user
+      - DATA_SOURCE_PASS_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    networks:
+      - data_net
+    depends_on:
+      - postgresql
 
 

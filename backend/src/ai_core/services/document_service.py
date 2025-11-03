@@ -483,6 +483,8 @@ class DocumentService:
         knowledge_base_id: str,
         progress_job_id: str | None = None,
     ) -> Tuple[str, int]:
+        # Wrap entire ingest in a single transaction for atomicity
+        trans = self.db.begin()
         try:
             # Validate tenant_id is a valid UUID
             import uuid
@@ -527,8 +529,8 @@ class DocumentService:
                     status="PROCESSING",
                 )
             self.db.add(doc)
-            self.db.commit()
-            self.db.refresh(doc)
+            # Flush to assign PKs without committing the transaction
+            self.db.flush()
 
             # AI-driven ingest plan and chunking
             plan = self.plan_ingest(title, content[:8000])
@@ -622,7 +624,7 @@ class DocumentService:
             doc.status = "INDEXED"
             doc.chunk_count = len(chunks)
             self.db.add(doc)
-            self.db.commit()
+            self.db.flush()
 
             # Best-effort: upsert vectors to Qdrant when dimensions match (OpenAI = 1536)
             try:
@@ -701,10 +703,15 @@ class DocumentService:
                     )
                 except Exception:
                     pass
+            # Commit the DB transaction only after all DB writes succeed
+            trans.commit()
             return str(doc.id), len(chunks)
         except Exception as e:
             # If there's an error, rollback the transaction
-            self.db.rollback()
+            try:
+                trans.rollback()
+            except Exception:
+                pass
             raise
 
     # ----------------------------
