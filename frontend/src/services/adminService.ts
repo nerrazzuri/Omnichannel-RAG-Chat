@@ -41,6 +41,16 @@ export async function getTenantSummary(cfg: AdminConfig, tenantId: string) {
   return r.json();
 }
 
+export async function createTenant(cfg: AdminConfig, body: { name: string; domain: string; subscription_tier?: string; settings?: Record<string, any> }) {
+  const r = await fetch(`${cfg.apiBase}/v1/admin/tenants/create`, {
+    method: 'POST',
+    headers: headers(cfg.token),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`tenant create failed: ${r.status}`);
+  return r.json();
+}
+
 export async function listApprovals(cfg: AdminConfig, tenantId: string, status?: string) {
   const qs = new URLSearchParams({ tenant_id: tenantId, ...(status ? { status } : {}) });
   const r = await fetch(`${cfg.apiBase}/v1/agent/approvals/list?${qs.toString()}`, { headers: headers(cfg.token) });

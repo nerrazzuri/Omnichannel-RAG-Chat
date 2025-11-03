@@ -8,6 +8,7 @@ import {
   updateRetentionPolicy,
   listTenants,
   getTenantSummary,
+  createTenant,
 } from '../../services/adminService';
 
 export default function SuperAdmin() {
@@ -28,6 +29,11 @@ export default function SuperAdmin() {
   const [tenantInfo, setTenantInfo] = useState<any | null>(null);
   const [approvalsStats, setApprovalsStats] = useState<Record<string, number>>({});
   const [costSnapshot, setCostSnapshot] = useState<{ tokens_in: number; tokens_out: number; cost_cents: number } | null>(null);
+
+  const [newTenantName, setNewTenantName] = useState('');
+  const [newTenantDomain, setNewTenantDomain] = useState('');
+  const [newTenantTier, setNewTenantTier] = useState('BASIC');
+  const [creatingTenant, setCreatingTenant] = useState(false);
 
   const loadFeatures = async () => {
     setLoadingFeatures(true);
@@ -108,19 +114,6 @@ export default function SuperAdmin() {
     }
   };
 
-  const loadRetention = async () => {
-    setLoadingRetention(true);
-    setMsg('');
-    try {
-      const rows = await listRetentionPolicies(cfg, tenantId);
-      setRetention(rows);
-    } catch (e: any) {
-      setMsg(`Load retention failed: ${e.message || e}`);
-    } finally {
-      setLoadingRetention(false);
-    }
-  };
-
   const onRetentionSave = async (row: any) => {
     setMsg('');
     try {
@@ -134,6 +127,22 @@ export default function SuperAdmin() {
       await loadRetention();
     } catch (e: any) {
       setMsg(`Retention update failed: ${e.message || e}`);
+    }
+  };
+
+  const onCreateTenant = async () => {
+    setCreatingTenant(true);
+    setMsg('');
+    try {
+      const res = await createTenant(cfg, { name: newTenantName, domain: newTenantDomain, subscription_tier: newTenantTier });
+      setMsg('Tenant created');
+      await loadTenants();
+      if (res?.id) setTenantId(res.id);
+      await loadSummary();
+    } catch (e: any) {
+      setMsg(`Create tenant failed: ${e.message || e}`);
+    } finally {
+      setCreatingTenant(false);
     }
   };
 
@@ -186,6 +195,31 @@ export default function SuperAdmin() {
             <div className="flex gap-2">
               <button onClick={loadFeatures} disabled={loadingFeatures} className="px-3 py-2 text-sm rounded border bg-white hover:bg-gray-50">Load</button>
               <button onClick={saveFeatures} disabled={loadingFeatures} className="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
+          <h2 className="font-medium mb-3">Create Tenant</h2>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="block text-sm text-gray-600">Name</label>
+              <input className="w-full border rounded px-3 py-2" value={newTenantName} onChange={(e) => setNewTenantName(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Domain</label>
+              <input className="w-full border rounded px-3 py-2" value={newTenantDomain} onChange={(e) => setNewTenantDomain(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Tier</label>
+              <select className="w-full border rounded px-3 py-2" value={newTenantTier} onChange={(e) => setNewTenantTier(e.target.value)}>
+                <option value="BASIC">BASIC</option>
+                <option value="PROFESSIONAL">PROFESSIONAL</option>
+                <option value="ENTERPRISE">ENTERPRISE</option>
+              </select>
+            </div>
+            <div>
+              <button onClick={onCreateTenant} disabled={creatingTenant || !newTenantName || !newTenantDomain} className="w-full px-3 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700">Create</button>
             </div>
           </div>
         </div>
