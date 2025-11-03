@@ -96,7 +96,14 @@ app_logger = logging.getLogger(__name__)
 from starlette.middleware.base import BaseHTTPMiddleware
 import uuid as _uuid
 
-# Initialize Vault secrets BEFORE importing auth middleware (which reads JWT at import)
+# Load secrets from *_FILE env first, then initialize Vault secrets BEFORE importing auth middleware
+try:
+    from shared.security.secret_loader import load_file_env_secrets
+
+    load_file_env_secrets()
+except Exception:
+    pass
+
 try:
     from shared.config.tuning import vault as vault_cfg
 

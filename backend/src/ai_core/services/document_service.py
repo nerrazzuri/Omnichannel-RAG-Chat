@@ -705,11 +705,23 @@ class DocumentService:
                     pass
             # Commit the DB transaction only after all DB writes succeed
             trans.commit()
+            try:
+                from shared.metrics.ingestion_metrics import ingestion_metrics
+
+                ingestion_metrics.inc_success(tenant_id, 1)
+            except Exception:
+                pass
             return str(doc.id), len(chunks)
         except Exception as e:
             # If there's an error, rollback the transaction
             try:
                 trans.rollback()
+            except Exception:
+                pass
+            try:
+                from shared.metrics.ingestion_metrics import ingestion_metrics
+
+                ingestion_metrics.inc_failure(locals().get("tenant_id", "global"), 1)
             except Exception:
                 pass
             raise
