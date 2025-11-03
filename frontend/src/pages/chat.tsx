@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { streamQuery } from '../services/chatService';
+import { postQuery } from '../services/chatService';
 import MessageRenderer from '../components/MessageRenderer';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type Citation = { source?: string; title?: string; relevance?: number; snippet?: string; source_url?: string };
+type Message = { role: 'user' | 'assistant'; content: string; citations?: Citation[]; confidence?: number; intent?: string };
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -38,19 +39,16 @@ export default function ChatPage() {
   const send = async () => {
     if (!input.trim() || loading) return;
     const userMsg: Message = { role: 'user', content: input };
-    setMessages((m) => [...m, userMsg, { role: 'assistant', content: '' }]);
+    setMessages((m) => [...m, userMsg]);
     setInput('');
     setLoading(true);
-    let assistant = '';
     try {
-      for await (const chunk of streamQuery({ tenantId: '00000000-0000-0000-0000-000000000001', userId: '00000000-0000-0000-0000-000000000002', channel: 'web', message: userMsg.content })) {
-        assistant += chunk.data;
-        setMessages((m) => {
-          const copy = [...m];
-          copy[copy.length - 1] = { role: 'assistant', content: assistant };
-          return copy;
-        });
-      }
+      const resp = await postQuery({ tenantId: '00000000-0000-0000-0000-000000000001', userId: '00000000-0000-0000-0000-000000000002', channel: 'web', message: userMsg.content });
+      const content = resp.response || resp.final_response || '';
+      const citations: Citation[] = Array.isArray(resp.citations) ? resp.citations : [];
+      const confidence: number | undefined = typeof resp.confidence === 'number' ? resp.confidence : undefined;
+      const intent: string | undefined = resp.intent || resp.intent_label || undefined;
+      setMessages((m) => [...m, { role: 'assistant', content, citations, confidence, intent }]);
     } finally {
       setLoading(false);
     }
@@ -72,6 +70,27 @@ export default function ChatPage() {
             {isUser ? (
               <div className="whitespace-pre-wrap leading-relaxed text-sm">{m.content}</div>
             ) : (<MessageRenderer content={m.content} />)}
+            {!isUser && (m.intent || m.confidence !== undefined) && (
+              <div className="mt-2 text-[11px] text-gray-500 flex gap-3">
+                {m.intent && (<span>intent: {m.intent}</span>)}
+                {m.confidence !== undefined && (<span>confidence: {Math.round(m.confidence * 100)}%</span>)}
+              </div>
+            )}
+            {!isUser && m.citations && m.citations.length > 0 && (
+              <div className="mt-2 border-t pt-2">
+                <div className="text-xs font-medium text-gray-600 mb-1">Citations</div>
+                <ul className="list-disc pl-5 space-y-1">
+                  {m.citations.slice(0,5).map((c, i) => (
+                    <li key={i} className="text-xs text-gray-600">
+                      <a href={(c as any).source_url || (c as any).source} target="_blank" rel="noreferrer" className="underline hover:no-underline">
+                        {c.title || c.source || (c as any).source_url || 'source'}
+                      </a>
+                      {c.relevance !== undefined && <span className="ml-1">({Math.round((c.relevance as number) * 100)}%)</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {!isUser && urls.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
                 {urls.map((u, idx) => (

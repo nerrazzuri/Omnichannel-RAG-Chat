@@ -3,6 +3,24 @@ export type StreamChunk = {
   data: string;
 };
 
+export async function postQuery(payload: any): Promise<any> {
+  const res = await fetch('/api/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    const j = await res.json();
+    if (!res.ok) throw new Error(j?.detail || j?.error || 'request failed');
+    return j;
+  } else {
+    const t = await res.text();
+    if (!res.ok) throw new Error(t || 'request failed');
+    return { response: t };
+  }
+}
+
 export async function* streamQuery(payload: any): AsyncGenerator<StreamChunk> {
   const res = await fetch('/api/query', {
     method: 'POST',

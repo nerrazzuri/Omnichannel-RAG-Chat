@@ -222,6 +222,7 @@ export class WebhookService {
       }
     } catch (error) {
       this.logger.error('Failed to forward message to AI Core:', error);
+      throw error;
     }
   }
 }

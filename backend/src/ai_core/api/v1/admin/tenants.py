@@ -27,9 +27,10 @@ def get_db():
 
 
 def _require_admin(request: Request):
-    # Allow in dev/local/test or when AUTH_ALLOW_ALL is set
+    # Allow bypass only in dev/local/test WHEN explicitly enabled
     env = os.getenv("ENV", "dev").lower()
-    if env in ("dev", "local", "test") or os.getenv("AUTH_ALLOW_ALL", "").lower() in ("1", "true", "yes"):
+    bypass = os.getenv("AUTH_BYPASS_ENABLE", "").lower() in ("1", "true", "yes")
+    if env in ("dev", "local", "test") and bypass:
         return True
     claims = getattr(request.state, "claims", {}) or {}
     role = (claims.get("role") or "").upper()
