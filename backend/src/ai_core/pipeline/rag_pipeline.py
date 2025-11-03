@@ -294,6 +294,25 @@ class RAGPipeline:
                         return payload
             except Exception:
                 pass
+        # If still no context and web-search not used, return a standard helpful response
+        if not ctx_texts:
+            try:
+                standard = (
+                    "I couldn’t find relevant information in your workspace for this question.\n\n"
+                    "- Try rephrasing with more specifics (topic, doc title, date).\n"
+                    "- Ask about content you’ve uploaded (policies, procedures, FAQs).\n"
+                    "- Or ask your admin to enable web search to broaden answers."
+                )
+                payload = self.response_formatter.generate(
+                    query,
+                    [standard],
+                    intent="general",
+                    result_hint=standard,
+                    tenant_id=tenant_id,
+                )
+                return payload
+            except Exception:
+                pass
         # Prepend memory summary and recent exchanges to context (lightweight)
         memory_block: List[str] = []
         if memory_summary:
