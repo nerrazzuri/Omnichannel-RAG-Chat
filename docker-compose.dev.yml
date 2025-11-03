@@ -95,6 +95,7 @@ services:
     environment:
       - AI_CORE_URL=http://ai-core:8000
       - JWT_SECRET=${JWT_SECRET}
+      - REDIS_URL=redis://redis:6379/0
       - AUTH_ALLOW_ALL=1
       - AUTH_BYPASS_TENANT=00000000-0000-0000-0000-000000000001
     depends_on:

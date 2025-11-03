@@ -45,6 +45,10 @@ resource "kubernetes_deployment" "gateway" {
             name  = "AI_CORE_URL"
             value = try(data.vault_generic_secret.gateway.data["AI_CORE_URL"], "http://ai-core:8000")
           }
+          env {
+            name  = "REDIS_URL"
+            value = try(data.vault_generic_secret.gateway.data["REDIS_URL"], "redis://redis:6379/0")
+          }
           liveness_probe {
             http_get {
               path = "/api/health"
