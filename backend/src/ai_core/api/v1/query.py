@@ -14,6 +14,7 @@ from shared.plans.registry import resolve_plan_label, get_plan
 from shared.metrics.request_metrics import inc_request
 from ai_core.api.deps import require
 from ai_core.pipeline.audit_service import write_audit
+import logging
 import csv, io
 import uuid
 import re
@@ -191,6 +192,20 @@ def post_query(
             for r in rows:
                 used += int(r[0] or 0) + int(r[1] or 0)
             if used >= int(limit_tokens * 0.98):
+                try:
+                    logging.getLogger("ai_core").info(
+                        "plan_limit_hit",
+                        extra={
+                            "tenant_id": str(tenant_uuid),
+                            "plan_type": plan_label,
+                            "feature": "chat",
+                            "action": "query",
+                            "reason": "token_quota",
+                            "status": 403,
+                        },
+                    )
+                except Exception:
+                    pass
                 raise HTTPException(status_code=403, detail="Monthly token quota reached. Upgrade to Pro for higher limits.")
     except HTTPException:
         raise

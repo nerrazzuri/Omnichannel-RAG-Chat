@@ -5,6 +5,7 @@ import { AppModule } from './app.module';
 import rateLimit from 'express-rate-limit';
 import { planRateLimit } from './rate/planLimiter';
 import { planGuard } from './middleware/planGuard';
+import { planHeader } from './middleware/planHeader';
 import { startWebhookWorker } from './queue/retryQueue';
 
 async function bootstrap() {
@@ -31,6 +32,7 @@ async function bootstrap() {
   const limiter = rateLimit({ windowMs: 60_000, max: 0 }); // disabled; prefer plan-based limiter below
   app.use(planRateLimit());
   app.use(planGuard());
+  app.use(planHeader());
 
   // Start Redis-backed webhook worker
   startWebhookWorker();

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { getRedis } from '../redis/redis';
-import { rateLimitHits, requestsTotal } from '../metrics/metrics';
+import { rateLimitHits, requestsTotal, rateLimitExceeded } from '../metrics/metrics';
 
 function planFromClaims(req: Request): string {
   const claims: any = (req as any).claims || {};
@@ -27,10 +27,11 @@ export function planRateLimit() {
       const max = limitForPlan(plan);
       if (val > max) {
         try { rateLimitHits.labels(req.path || '/', plan).inc(); } catch {}
+        try { rateLimitExceeded.labels(plan).inc(); } catch {}
         res.setHeader('X-Upgrade-Suggestion', plan === 'free' ? 'Upgrade to Pro for 60 req/min' : 'Contact sales for Enterprise');
         return res.status(429).json({ detail: 'Rate limit exceeded', plan_type: plan });
       }
-      try { requestsTotal.labels(req.path || '/', req.method || 'GET', '200', plan).inc(); } catch {}
+      // Note: requestsTotal with status should be incremented at controller layer for accurate status codes.
       next();
     } catch {
       next();

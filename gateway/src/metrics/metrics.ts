@@ -12,6 +12,12 @@ export const rateLimitHits = new Counter({
   labelNames: ['path', 'plan_type'] as const,
 });
 
+export const rateLimitExceeded = new Counter({
+  name: 'gateway_rate_limit_exceeded_total',
+  help: 'Rate limit exceeded events',
+  labelNames: ['plan_type'] as const,
+});
+
 export const queueEnqueued = new Counter({
   name: 'gateway_queue_enqueued_total',
   help: 'Webhook jobs enqueued',
