@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-limits
+  namespace: omni-free
+spec:
+  limits:
+  - default:
+      cpu: "250m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "256Mi"
+    type: Container
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: namespace-quota
+  namespace: omni-free
+spec:
+  hard:
+    pods: "20"
+    requests.cpu: "1"
+    requests.memory: "1Gi"
+    limits.cpu: "2"
+    limits.memory: "2Gi"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-limits
+  namespace: omni-pro
+spec:
+  limits:
+  - default:
+      cpu: "1"
+      memory: "2Gi"
+    defaultRequest:
+      cpu: "300m"
+      memory: "512Mi"
+    type: Container
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: namespace-quota
+  namespace: omni-pro
+spec:
+  hard:
+    pods: "50"
+    requests.cpu: "4"
+    requests.memory: "8Gi"
+    limits.cpu: "6"
+    limits.memory: "12Gi"
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-core-pdb
+  namespace: omni-free
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ai-core
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-pdb
+  namespace: omni-free
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: gateway
+
+

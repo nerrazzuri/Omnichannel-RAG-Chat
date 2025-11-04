@@ -1,0 +1,71 @@
+name: Prod Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-test-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node & Python
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build images
+        run: |
+          echo "Build stubs (docker buildx would go here)"
+      - name: Run tests (unit + tier)
+        run: |
+          echo "Run unit + tier tests"
+      - name: Terraform plan (prod)
+        run: |
+          echo "TF plan stub"
+      - name: Sign artifacts
+        run: |
+          echo "cosign sign stub"
+
+  deploy-free-pro:
+    needs: [build-test-sign]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup kubectl & kustomize
+        run: |
+          echo "Setup kubectl/kustomize"
+      - name: Apply namespaces and quotas
+        run: |
+          kubectl apply -f infra/k8s/prod/namespaces.yaml
+          kubectl apply -f infra/k8s/prod/quotas-and-limits.yaml
+          kubectl apply -f infra/k8s/prod/network-policies.yaml
+      - name: Deploy omni-free
+        run: |
+          kubectl apply -k infra/k8s/prod/omni-free
+      - name: Deploy omni-pro
+        run: |
+          kubectl apply -k infra/k8s/prod/omni-pro
+
+  deploy-tenant-example:
+    needs: [build-test-sign]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy tenant-example
+        run: |
+          kubectl apply -k infra/k8s/prod/tenant-example
+
+  post-deploy-checks:
+    needs: [deploy-free-pro, deploy-tenant-example]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Smoke tests & SLO checks
+        run: |
+          echo "Run smoke tests and verify SLO metrics; rollback if failed"
+
+

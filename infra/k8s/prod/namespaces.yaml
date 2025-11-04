@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omni-free
+  labels:
+    tier: free
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omni-pro
+  labels:
+    tier: pro
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-example
+  labels:
+    tier: enterprise
+
+
