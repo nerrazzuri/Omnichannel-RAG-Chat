@@ -9,8 +9,8 @@ from ai_core.pipeline.rag_pipeline import RAGPipeline
 from ai_core.pipeline.rag_pipeline import RAGPipeline
 from shared.database.session import get_db
 from ai_core.api.deps import require
-from shared.database.models import KnowledgeChunk, Document, KnowledgeBase, Tenant
-from shared.plans.registry import resolve_plan_label
+from shared.database.models import KnowledgeChunk, Document, KnowledgeBase, Tenant, CostSummary
+from shared.plans.registry import resolve_plan_label, get_plan
 from shared.metrics.request_metrics import inc_request
 from ai_core.api.deps import require
 from ai_core.pipeline.audit_service import write_audit
@@ -170,6 +170,30 @@ def post_query(
         plan_label = "free"
     try:
         inc_request(plan_label, "/v1/query")
+    except Exception:
+        pass
+
+    # Soft token quota enforcement (monthly)
+    try:
+        plan = get_plan(plan_label)
+        limit_tokens = int(plan.get("limits", {}).get("max_tokens_per_month") or 0)
+        if limit_tokens > 0:
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc)
+            start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            rows = (
+                db.query(CostSummary.tokens_in, CostSummary.tokens_out)
+                .filter(CostSummary.tenant_id == str(tenant_uuid), CostSummary.window_start >= start)
+                .all()
+            )
+            used = 0
+            for r in rows:
+                used += int(r[0] or 0) + int(r[1] or 0)
+            if used >= int(limit_tokens * 0.98):
+                raise HTTPException(status_code=403, detail="Monthly token quota reached. Upgrade to Pro for higher limits.")
+    except HTTPException:
+        raise
     except Exception:
         pass
 
@@ -1000,8 +1024,10 @@ def post_query(
             "interpreted": result.get("memory_interpreted", []),
         }
         buf.append(entry)
-        if len(buf) > 10:
-            buf = buf[-10:]
+        # Cap memory buffer by plan
+        mem_cap = 4 if plan_label == "free" else (10 if plan_label == "pro" else 20)
+        if len(buf) > mem_cap:
+            buf = buf[-mem_cap:]
         convo_ctx[mem_key] = buf
         # Also persist a generic memory snippet of the response (last 10)
         try:

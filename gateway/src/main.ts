@@ -4,6 +4,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import rateLimit from 'express-rate-limit';
 import { planRateLimit } from './rate/planLimiter';
+import { planGuard } from './middleware/planGuard';
 import { startWebhookWorker } from './queue/retryQueue';
 
 async function bootstrap() {
@@ -29,6 +30,7 @@ async function bootstrap() {
   // Basic rate limiting (per-IP); for distributed setups, back with Redis store
   const limiter = rateLimit({ windowMs: 60_000, max: 0 }); // disabled; prefer plan-based limiter below
   app.use(planRateLimit());
+  app.use(planGuard());
 
   // Start Redis-backed webhook worker
   startWebhookWorker();

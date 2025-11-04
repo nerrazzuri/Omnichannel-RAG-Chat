@@ -15,6 +15,8 @@ from ai_core.api.webhooks.teams import router as teams_router
 from ai_core.api.webhooks.telegram import router as telegram_router
 from ai_core.api.v1.internal import router as internal_router
 from ai_core.api.v1.tenant import router as tenant_router
+from ai_core.api.v1.tenant.plan import router as tenant_plan_router
+from ai_core.api.v1.tenant.usage import router as tenant_usage_router
 from .api.v1.reranker import router as reranker_router
 from ai_core.api.v1.admin.api_keys import router as apikey_router
 from ai_core.api.v1.admin.rerank import router as rerank_admin_router
@@ -765,6 +767,8 @@ app.include_router(internal_router)
 app.include_router(teams_router)
 app.include_router(telegram_router)
 app.include_router(tenant_router)
+app.include_router(tenant_plan_router)
+app.include_router(tenant_usage_router)
 app.include_router(reranker_router)
 app.include_router(apikey_router)
 app.include_router(rerank_admin_router)

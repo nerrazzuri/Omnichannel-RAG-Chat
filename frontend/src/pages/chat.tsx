@@ -10,6 +10,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [planType, setPlanType] = useState<string>('');
+  const [usage, setUsage] = useState<{ tokens_used: number; tokens_quota: number } | null>(null);
   // Sidebar removed for minimal UI
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -29,6 +30,11 @@ export default function ChatPage() {
         if (r.ok) {
           const j = await r.json();
           setPlanType(j?.plan_type || '');
+        }
+        const u = await fetch('/api/tenant/usage');
+        if (u.ok) {
+          const ju = await u.json();
+          setUsage({ tokens_used: ju?.tokens_used || 0, tokens_quota: ju?.tokens_quota || 0 });
         }
       } catch {}
     })();
@@ -142,6 +148,9 @@ export default function ChatPage() {
         {planType && (
           <div className="bg-blue-50 border-t border-blue-100 text-blue-800 text-xs py-2 px-4">
             Plan: <span className="font-medium uppercase">{planType}</span>{planType==='free' ? ' — Upgrade to Pro for higher limits.' : ''}
+            {usage && usage.tokens_quota > 0 && (
+              <span className="ml-4">Tokens: {usage.tokens_used}/{usage.tokens_quota}</span>
+            )}
           </div>
         )}
       </header>
