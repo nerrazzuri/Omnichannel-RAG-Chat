@@ -9,6 +9,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [planType, setPlanType] = useState<string>('');
   // Sidebar removed for minimal UI
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -19,6 +20,18 @@ export default function ChatPage() {
       setMessages([{ role: 'assistant', content: "Hello! I'm Omni. How can I help you today?" }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/tenant/plan', { headers: {} });
+        if (r.ok) {
+          const j = await r.json();
+          setPlanType(j?.plan_type || '');
+        }
+      } catch {}
+    })();
   }, []);
 
   useEffect(() => {
@@ -126,6 +139,11 @@ export default function ChatPage() {
             <a href="/admin/UploadDocument" className="hidden sm:inline-flex text-sm text-gray-600 hover:text-gray-900">Knowledge</a>
           </div>
         </div>
+        {planType && (
+          <div className="bg-blue-50 border-t border-blue-100 text-blue-800 text-xs py-2 px-4">
+            Plan: <span className="font-medium uppercase">{planType}</span>{planType==='free' ? ' — Upgrade to Pro for higher limits.' : ''}
+          </div>
+        )}
       </header>
 
       <div className="max-w-7xl mx-auto px-4">

@@ -9,7 +9,9 @@ from ai_core.pipeline.rag_pipeline import RAGPipeline
 from ai_core.pipeline.rag_pipeline import RAGPipeline
 from shared.database.session import get_db
 from ai_core.api.deps import require
-from shared.database.models import KnowledgeChunk, Document, KnowledgeBase
+from shared.database.models import KnowledgeChunk, Document, KnowledgeBase, Tenant
+from shared.plans.registry import resolve_plan_label
+from shared.metrics.request_metrics import inc_request
 from ai_core.api.deps import require
 from ai_core.pipeline.audit_service import write_audit
 import csv, io
@@ -159,6 +161,17 @@ def post_query(
             return True
         tokens = [t for t in s.split() if t]
         return 2 <= len(tokens) <= 4
+
+    # Plan label for metrics
+    try:
+        t = db.query(Tenant).filter(Tenant.id == tenant_uuid).first()
+        plan_label = resolve_plan_label(getattr(t, "subscription_tier", None))
+    except Exception:
+        plan_label = "free"
+    try:
+        inc_request(plan_label, "/v1/query")
+    except Exception:
+        pass
 
     # Build tenant-specific corpus with associated columns metadata when available
     q = (

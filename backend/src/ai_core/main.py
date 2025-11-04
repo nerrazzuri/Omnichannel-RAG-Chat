@@ -23,6 +23,8 @@ from ai_core.api.v1.admin.backup import router as backup_admin_router
 from ai_core.api.v1.admin.restore import router as restore_admin_router
 from ai_core.api.v1.admin.retention import router as retention_admin_router
 from ai_core.api.v1.admin.compliance import router as compliance_admin_router
+from ai_core.api.v1.admin.plans import router as plans_admin_router
+from ai_core.api.v1.tenant.plan import router as tenant_plan_router
 from ai_core.api.v1.admin.tenants import router as tenants_admin_router
 from ai_core.api.v1.feedback import router as feedback_router
 from ai_core.api.v1.agent.approvals import router as approvals_router
@@ -774,6 +776,8 @@ app.include_router(retention_admin_router)
 app.include_router(features_admin_router)
 app.include_router(compliance_admin_router)
 app.include_router(tenants_admin_router)
+app.include_router(plans_admin_router)
+app.include_router(tenant_plan_router)
 
 if __name__ == "__main__":
     import uvicorn

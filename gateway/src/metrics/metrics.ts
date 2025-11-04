@@ -3,13 +3,13 @@ import { Counter } from 'prom-client';
 export const requestsTotal = new Counter({
   name: 'gateway_requests_total',
   help: 'Total HTTP requests',
-  labelNames: ['path', 'method', 'status'] as const,
+  labelNames: ['path', 'method', 'status', 'plan_type'] as const,
 });
 
 export const rateLimitHits = new Counter({
   name: 'gateway_rate_limit_hits_total',
   help: 'Rate limit hits',
-  labelNames: ['path'] as const,
+  labelNames: ['path', 'plan_type'] as const,
 });
 
 export const queueEnqueued = new Counter({
