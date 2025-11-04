@@ -8,6 +8,12 @@ function planFromClaims(req: Request): string {
   return ['free','pro','enterprise'].includes(p) ? p : 'free';
 }
 
+function tenantFromClaims(req: Request): string {
+  const claims: any = (req as any).claims || {};
+  const t = (claims.tenant_id || '').toString();
+  return t || 'unknown';
+}
+
 function limitForPlan(plan: string): number {
   if (plan === 'free') return 10;
   if (plan === 'pro') return 60;
@@ -21,7 +27,8 @@ export function planRateLimit() {
       const r = getRedis();
       if (!r) return next();
       const minute = Math.floor(Date.now() / 60000);
-      const key = `rate:plan:${plan}:${minute}`;
+      const tenant = tenantFromClaims(req);
+      const key = `rate:tenant:${tenant}:${plan}:${minute}`;
       const val = await r.incr(key);
       if (val === 1) await r.expire(key, 60);
       const max = limitForPlan(plan);

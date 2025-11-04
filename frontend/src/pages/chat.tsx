@@ -62,7 +62,7 @@ export default function ChatPage() {
     setInput('');
     setLoading(true);
     try {
-      const resp = await postQuery({ tenantId: '00000000-0000-0000-0000-000000000001', userId: '00000000-0000-0000-0000-000000000002', channel: 'web', message: userMsg.content });
+      const resp = await postQuery({ channel: 'web', message: userMsg.content });
       const content = resp.response || resp.final_response || '';
       const citations: Citation[] = Array.isArray(resp.citations) ? resp.citations : [];
       const confidence: number | undefined = typeof resp.confidence === 'number' ? resp.confidence : undefined;

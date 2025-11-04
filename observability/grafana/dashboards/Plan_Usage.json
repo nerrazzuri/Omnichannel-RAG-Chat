@@ -1,0 +1,10 @@
+{
+  "title": "Plan Usage Overview",
+  "panels": [
+    { "type": "graph", "title": "AI-Core Requests by Plan", "targets": [{ "expr": "sum by(plan_type)(rate(ai_core_requests_total[5m]))" }] },
+    { "type": "graph", "title": "Gateway Rate Limit Exceeded by Plan", "targets": [{ "expr": "sum by(plan_type)(rate(gateway_rate_limit_exceeded_total[5m]))" }] },
+    { "type": "graph", "title": "Connector Syncs by Plan", "targets": [{ "expr": "sum by(plan_type)(rate(connector_sync_total[5m]))" }] }
+  ]
+}
+
+

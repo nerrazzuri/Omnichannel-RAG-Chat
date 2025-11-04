@@ -10,6 +10,10 @@ from ai_core.connectors.registry import registry
 from ai_core.connectors.sharepoint import SharePointConnector
 from ai_core.connectors.googledrive import GoogleDriveConnector
 from ai_core.connectors.salesforce import SalesforceConnector
+from shared.database.session import SessionLocal
+from shared.database.models import Tenant
+from shared.plans.registry import resolve_plan_label, get_plan
+from shared.metrics.connector_metrics import inc_sync
 
 
 # Register built-in connectors
@@ -79,8 +83,34 @@ class ConnectorScheduler:
                 if not cls:
                     continue
                 try:
+                    # Plan enforcement: allowed connectors
+                    plan_label = "free"
+                    try:
+                        s = SessionLocal()
+                        try:
+                            t = s.query(Tenant).filter(Tenant.id == tenant).first()
+                            plan_label = resolve_plan_label(getattr(t, "subscription_tier", None))
+                        finally:
+                            s.close()
+                    except Exception:
+                        plan_label = "free"
+                    allowed = get_plan(plan_label).get("connectors_allowed", [])
+                    if allowed != "*" and name not in allowed:
+                        self._log.info(
+                            "connector_blocked_by_plan",
+                            extra={"tenant_id": tenant, "connector": name, "plan_type": plan_label},
+                        )
+                        try:
+                            inc_sync(plan_label, name, tenant, "blocked")
+                        except Exception:
+                            pass
+                        continue
                     c = cls(tenant)
                     c.run_sync()
+                    try:
+                        inc_sync(plan_label, name, tenant, "ok")
+                    except Exception:
+                        pass
                 except Exception as e:
                     # Log connector-specific errors with context
                     self._log.exception(
@@ -92,6 +122,10 @@ class ConnectorScheduler:
                             "action": "connector.sync",
                         },
                     )
+                    try:
+                        inc_sync(plan_label, name, tenant, "error")
+                    except Exception:
+                        pass
             elapsed = time.time() - start
             sleep_s = max(1.0, self._interval - elapsed)
             time.sleep(sleep_s)

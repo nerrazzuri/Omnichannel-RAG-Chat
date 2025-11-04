@@ -1,3 +1,16 @@
+from prometheus_client import Counter
+
+
+connector_sync_total = Counter(
+    "connector_sync_total", "Connector sync runs", ["plan_type", "connector", "tenant_id", "status"]
+)
+
+def inc_sync(plan_type: str, connector: str, tenant_id: str, status: str) -> None:
+    try:
+        connector_sync_total.labels(plan_type=plan_type or "unknown", connector=connector or "unknown", tenant_id=tenant_id or "unknown", status=status or "ok").inc()
+    except Exception:
+        pass
+
 from __future__ import annotations
 
 try:

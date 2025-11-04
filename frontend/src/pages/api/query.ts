@@ -22,10 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return;
     }
 
+    const body = typeof req.body === 'object' && req.body ? { ...req.body } : {};
+    if (!body.tenant_id) body.tenant_id = tenantId;
+
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': auth, 'X-Tenant-ID': tenantId },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(body),
     });
 
     const contentType = r.headers.get('content-type') || '';

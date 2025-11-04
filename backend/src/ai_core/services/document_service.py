@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 from shared.vector.qdrant import qdrant_service
 from shared.config.tuning import chunking
 from shared.crypto.crypto_service import crypto_service
+from shared.plans.registry import resolve_plan_label, get_plan
 
 try:
     import tiktoken  # type: ignore
@@ -971,6 +972,32 @@ class DocumentService:
         """End-to-end: load file to DataFrame(s), convert to semantic docs, embed and store one chunk per doc.
         Returns (document_id_of_first, total_chunks).
         """
+        # Plan enforcement: file size and max_docs
+        try:
+            from shared.database.models import KnowledgeBase, Document as _Doc
+
+            from sqlalchemy import func as _f
+            s_bytes = len(data or b"")
+            # Determine plan label
+            t = self.db.query(Tenant).filter(Tenant.id == tenant_id).first()
+            plan_label = resolve_plan_label(getattr(t, "subscription_tier", None))
+            plan = get_plan(plan_label)
+            max_size = int(plan.get("limits", {}).get("max_file_size") or 0)
+            if max_size and s_bytes > max_size:
+                raise ValueError("File exceeds plan file size limit. Upgrade plan.")
+            # Count docs for tenant
+            cnt = (
+                self.db.query(_Doc)
+                .join(KnowledgeBase, _Doc.knowledge_base_id == KnowledgeBase.id)
+                .filter(KnowledgeBase.tenant_id == tenant_id)
+                .count()
+            )
+            max_docs = int(plan.get("limits", {}).get("max_docs") or 0)
+            if max_docs and cnt >= max_docs:
+                raise ValueError("Maximum documents reached for your plan. Upgrade to add more.")
+        except Exception as _e:
+            # proceed if enforcement queries fail; errors will surface elsewhere
+            pass
         # Load multiple DataFrames (sheets)
         dfs = self.load_file_to_dataframes(filename, data)
         logger = logging.getLogger(__name__)

@@ -3,11 +3,17 @@ from __future__ import annotations
 from typing import Dict, Any
 
 
+PLAN_COPY: Dict[str, str] = {
+    "free": "Free: Chat with your data and connect public drives.",
+    "pro": "Pro: Expand storage, connectors, and team access.",
+    "enterprise": "Enterprise: Full integration, compliance, and dedicated environment.",
+}
+
 PLANS: Dict[str, Dict[str, Any]] = {
     "free": {
         "plan_name": "Free",
         "plan_label": "free",
-        "description": "Chat with your data and connect public drives.",
+        "description": PLAN_COPY["free"],
         "limits": {
             "max_docs": 10,
             "max_file_size": 5 * 1024 * 1024,
@@ -28,7 +34,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
     "pro": {
         "plan_name": "Pro",
         "plan_label": "pro",
-        "description": "Expand storage, connectors, and team access.",
+        "description": PLAN_COPY["pro"],
         "limits": {
             "max_docs": 1_000,
             "max_file_size": 50 * 1024 * 1024,
@@ -49,7 +55,7 @@ PLANS: Dict[str, Dict[str, Any]] = {
     "enterprise": {
         "plan_name": "Enterprise",
         "plan_label": "enterprise",
-        "description": "Full integration, compliance, and dedicated environment.",
+        "description": PLAN_COPY["enterprise"],
         "limits": {
             "max_docs": 10_000_000,
             "max_file_size": 500 * 1024 * 1024,
@@ -82,5 +88,9 @@ def get_plan(subscription_tier: str | None) -> Dict[str, Any]:
 
 def list_plans() -> Dict[str, Dict[str, Any]]:
     return PLANS
+
+def get_public_plan_copy(label: str) -> str:
+    lab = resolve_plan_label(label)
+    return PLAN_COPY.get(lab, PLAN_COPY["free"])
 
 
