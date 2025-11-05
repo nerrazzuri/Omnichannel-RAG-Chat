@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from shared.database.session import SessionLocal
 from ai_core.services.tenant_manager import TenantManager
 from ai_core.api.v1.admin.tenants import _require_admin  # reuse admin guard
+from shared.database.models import TenantAction, TenantMigration
 
 
 router = APIRouter(prefix="/v1/admin/tenants", tags=["admin-tenant-manager"])
@@ -87,5 +88,48 @@ def dry_run(tenant_id: str, target_plan: str, request: Request, db: Session = De
     _require_admin(request)
     tm = TenantManager(db)
     return tm.dry_run(tenant_id, target_plan)
+
+
+@router.get("/{tenant_id}/status")
+def status(tenant_id: str, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    acts = (
+        db.query(TenantAction)
+        .filter(TenantAction.tenant_id == tenant_id)
+        .order_by(TenantAction.created_at.desc())
+        .limit(25)
+        .all()
+    )
+    mig = (
+        db.query(TenantMigration)
+        .filter(TenantMigration.tenant_id == tenant_id)
+        .order_by(TenantMigration.started_at.desc().nullsfirst())
+        .limit(10)
+        .all()
+    )
+    return {
+        "actions": [
+            {
+                "id": str(a.id),
+                "action": a.action,
+                "status": a.status,
+                "reason": a.reason,
+                "created_at": str(a.created_at),
+            }
+            for a in acts
+        ],
+        "migrations": [
+            {
+                "id": str(m.id),
+                "from": m.from_plan,
+                "to": m.to_plan,
+                "type": m.migration_type,
+                "status": m.status,
+                "started_at": str(m.started_at) if m.started_at else None,
+                "finished_at": str(m.finished_at) if m.finished_at else None,
+            }
+            for m in mig
+        ],
+    }
 
 

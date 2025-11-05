@@ -1,8 +1,24 @@
-from prometheus_client import Counter
+from prometheus_client import Counter, Histogram
 
 
 connector_sync_total = Counter(
     "connector_sync_total", "Connector sync runs", ["plan_type", "connector", "tenant_id", "status"]
+)
+
+connector_sync_failures_total = Counter(
+    "connector_sync_failures_total", "Connector sync failures", ["tenant_id", "connector", "reason"]
+)
+
+connector_records_ingested_total = Counter(
+    "connector_records_ingested_total", "Records ingested by connector", ["tenant_id", "connector"]
+)
+
+connector_bytes_processed_total = Counter(
+    "connector_bytes_processed_total", "Bytes processed by connector", ["tenant_id", "connector"]
+)
+
+connector_duration_seconds = Histogram(
+    "connector_duration_seconds", "Connector sync duration seconds", ["tenant_id", "connector"]
 )
 
 def inc_sync(plan_type: str, connector: str, tenant_id: str, status: str) -> None:
