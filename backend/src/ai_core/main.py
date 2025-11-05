@@ -26,7 +26,9 @@ from ai_core.api.v1.admin.restore import router as restore_admin_router
 from ai_core.api.v1.admin.retention import router as retention_admin_router
 from ai_core.api.v1.admin.compliance import router as compliance_admin_router
 from ai_core.api.v1.admin.plans import router as plans_admin_router
+from ai_core.api.v1.admin.connectors import router as connectors_admin_router
 from ai_core.api.v1.admin.tenants import router as tenants_admin_router
+from ai_core.api.v1.admin.tenant_manager import router as tenant_manager_router
 from ai_core.api.v1.feedback import router as feedback_router
 from ai_core.api.v1.agent.approvals import router as approvals_router
 from shared.database.session import create_tables, SessionLocal
@@ -593,6 +595,19 @@ async def lifespan(app: FastAPI):
     t5.start()
     t6.start()
 
+    # Tenant migration worker
+    def _migration_loop():
+        try:
+            from ai_core.migration_worker import loop as _mig_loop
+
+            _mig_loop(stop_flag)
+        except Exception as e:
+            stability_metrics.inc_bg_failure("migration_worker")
+            log_and_continue(e, "tenant.migration_worker", None, None)
+
+    t8 = threading.Thread(target=_migration_loop, daemon=True)
+    t8.start()
+
     # Compliance worker
     def _compliance_loop():
         try:
@@ -780,6 +795,8 @@ app.include_router(features_admin_router)
 app.include_router(compliance_admin_router)
 app.include_router(tenants_admin_router)
 app.include_router(plans_admin_router)
+app.include_router(connectors_admin_router)
+app.include_router(tenant_manager_router)
 
 if __name__ == "__main__":
     import uvicorn

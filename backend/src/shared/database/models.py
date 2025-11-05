@@ -493,3 +493,59 @@ Index(
     ComplianceReport.tenant_id,
     ComplianceReport.created_at,
 )
+
+
+# Tenant lifecycle models
+class TenantAction(Base):
+    __tablename__ = "tenant_actions"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), nullable=False, index=True)
+    action = Column(String(64), nullable=False)
+    actor = Column(String(128))
+    status = Column(String(32), nullable=False, default="pending")
+    reason = Column(String(255))
+    extra = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=func.now(), index=True)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class TenantMigration(Base):
+    __tablename__ = "tenant_migrations"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), nullable=False, index=True)
+    from_plan = Column(String(32), nullable=False)
+    to_plan = Column(String(32), nullable=False)
+    migration_type = Column(String(16), nullable=False)  # soft|full
+    status = Column(String(32), nullable=False, default="pending")
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    stats = Column(JSON, default=dict)
+    error = Column(Text)
+
+
+class TenantConnector(Base):
+    __tablename__ = "tenant_connectors"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), nullable=False, index=True)
+    connector_id = Column(String(64), nullable=False, index=True)
+    status = Column(String(32), nullable=False, default="inactive")
+    config = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class ConnectorSyncRecord(Base):
+    __tablename__ = "connector_sync_records"
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(GUID(), nullable=False, index=True)
+    connector_id = Column(String(64), nullable=False, index=True)
+    started_at = Column(DateTime, default=func.now())
+    finished_at = Column(DateTime)
+    record_count = Column(Integer, default=0)
+    bytes = Column(Integer, default=0)
+    success = Column(Boolean, default=False)
+    errors = Column(JSON, default=dict)
