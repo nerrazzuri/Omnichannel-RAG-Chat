@@ -1,0 +1,45 @@
+groups:
+  - name: slo.core
+    rules:
+      - alert: HighErrorRate
+        expr: rate(ai_core_error_total[5m]) / clamp_min(rate(ai_core_requests_total[5m]), 1) > 0.01
+        for: 10m
+        labels:
+          severity: critical
+          service: ai-core
+        annotations:
+          summary: High error rate on AI-Core
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(ai_core_latency_seconds_bucket[5m])) by (le, plan_type)) > 1.5
+        for: 15m
+        labels:
+          severity: warning
+          service: ai-core
+        annotations:
+          summary: p95 latency above target for plan_type
+      - alert: BackupFailure
+        expr: ai_core_backup_job_success == 0
+        for: 30m
+        labels:
+          severity: critical
+          service: ai-core
+        annotations:
+          summary: Backup job failed
+      - alert: ConnectorFailureRate
+        expr: rate(connector_sync_failures_total[15m]) / clamp_min(rate(connector_sync_total[15m]), 1) > 0.05
+        for: 20m
+        labels:
+          severity: warning
+          service: connectors
+        annotations:
+          summary: Connector failure rate above 5%
+      - alert: RedisMemorySaturation
+        expr: redis_memory_used_bytes / clamp_max(redis_maxmemory_bytes, 1) > 0.9
+        for: 10m
+        labels:
+          severity: critical
+          service: redis
+        annotations:
+          summary: Redis memory near saturation
+
+
