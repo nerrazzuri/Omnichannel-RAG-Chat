@@ -1,0 +1,19 @@
+name: ZAP DAST (Nightly)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+
+jobs:
+  zap-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: ${{ secrets.STAGING_BASE_URL || 'http://localhost:3000' }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+
+

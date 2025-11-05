@@ -1,0 +1,34 @@
+name: SBOM, Scan & Sign
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build-scan-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.15.0
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.2.4/cosign-linux-amd64 -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
+      - name: Build images (stub)
+        run: echo "build container images in real pipeline"
+      - name: SBOM
+        run: syft packages dir:. -o cyclonedx-json > sbom.json
+      - name: Trivy FS scan
+        run: trivy fs --severity HIGH,CRITICAL --exit-code 0 .
+      - name: Sign images (stub)
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: echo "cosign sign --key $COSIGN_KEY <image>"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-and-scan
+          path: sbom.json
+
+

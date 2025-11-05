@@ -1,0 +1,26 @@
+groups:
+  - name: security.core
+    rules:
+      - alert: AuthFailuresSpike
+        expr: increase(gateway_auth_failures_total[10m]) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated authentication failures at gateway
+      - alert: VaultRenewFailures
+        expr: increase(vault_rotation_renew_fail_total[30m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Vault token renew failures detected
+      - alert: BackupJobFailures
+        expr: increase(ai_core_backup_failures_total[1h]) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup failures occurred in the last hour
+
+
