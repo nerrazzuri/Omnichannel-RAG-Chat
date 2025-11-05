@@ -1,0 +1,21 @@
+name: Tenant Lifecycle Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'backend/**'
+
+jobs:
+  dry-run-and-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run dry-run checks
+        run: |
+          echo "Invoke dry-run endpoints and validate output (stub)"
+      - name: Run two sample migrations
+        run: |
+          echo "Trigger upgrade soft and full migration (stub)"
+
+
