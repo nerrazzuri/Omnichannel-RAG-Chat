@@ -1,0 +1,43 @@
+name: SLO Gate
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Prod Deploy"]
+    types: ["completed"]
+
+jobs:
+  check-slo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check burn rate and availability
+        env:
+          PROM_URL: ${{ secrets.PROM_URL }}
+        run: |
+          if [ -z "$PROM_URL" ]; then echo "PROM_URL not set"; exit 1; fi
+          echo "Querying Prometheus..."
+          ERR_RATE=$(curl -s "$PROM_URL/api/v1/query?query=sum(rate(ai_core_error_total[30m]))/sum(rate(ai_core_requests_total[30m]))" | jq -r '.data.result[0].value[1]' || echo 0)
+          AVAIL=$(python - <<'PY'
+import os,sys,json,urllib.request
+u=os.environ['PROM_URL']+"/api/v1/query?query=1-(sum(rate(ai_core_error_total[30m]))/sum(rate(ai_core_requests_total[30m])))"
+r=json.load(urllib.request.urlopen(u))
+v=float(r.get('data',{}).get('result',[{'value':[0,'0']}])[0]['value'][1])
+print(v)
+PY
+)
+          echo "err_rate=$ERR_RATE avail=$AVAIL"
+          # Burn rate vs 1% target
+          BR=$(python - <<PY
+import os
+er=float(os.environ.get('ERR_RATE','0') or 0)
+print(er/0.01 if 0.01>0 else 0)
+PY
+)
+          echo "burn_rate=$BR"
+          FAIL=0
+          awk "BEGIN{exit !( $BR > 2.0 )}" && FAIL=1 || true
+          awk "BEGIN{exit !( $AVAIL < 0.99 )}" && FAIL=1 || true
+          if [ $FAIL -eq 1 ]; then echo "SLO gate failed"; exit 1; fi
+          echo "SLO gate passed"
+
+

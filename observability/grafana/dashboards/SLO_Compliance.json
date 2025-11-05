@@ -1,0 +1,11 @@
+{
+  "title": "SLO Compliance",
+  "panels": [
+    { "type": "graph", "title": "Availability by Plan", "targets": [{ "expr": "1 - (sum by(plan_type)(rate(ai_core_error_total[1h])) / sum by(plan_type)(rate(ai_core_requests_total[1h])))" }] },
+    { "type": "graph", "title": "p95 Latency by Plan", "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(ai_core_latency_seconds_bucket[5m])) by (le, plan_type))" }] },
+    { "type": "graph", "title": "Error Budget Burn Rate", "targets": [{ "expr": "(sum(rate(ai_core_error_total[30m]))/sum(rate(ai_core_requests_total[30m]))) / 0.01" }] },
+    { "type": "graph", "title": "Data Freshness (Backups)", "targets": [{ "expr": "(time() - max(ai_core_backup_job_success * 0 + vector(0)))" }] }
+  ]
+}
+
+
