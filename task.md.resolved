@@ -1,0 +1,93 @@
+# Task: Analyze Repository and Identify Missing Components
+
+- [ ] Analyze `/backend` structure and contents <!-- id: 0 -->
+    - [x] List root directory <!-- id: 1 -->
+    - [x] List `/backend` directory <!-- id: 2 -->
+    - [x] Analyze key backend files (dependencies, entry points, config) <!-- id: 3 -->
+    - [x] Identify missing components in backend (tests, docs, error handling, etc.) <!-- id: 4 -->
+- [ ] Analyze `/frontend` structure and contents <!-- id: 5 -->
+    - [x] List `/frontend` directory <!-- id: 6 -->
+    - [x] Analyze key frontend files (package.json, config, entry points) <!-- id: 7 -->
+    - [x] Identify missing components in frontend (tests, docs, linting, etc.) <!-- id: 8 -->
+- [ ] Analyze `/gateway` structure and contents <!-- id: 9 -->
+    - [x] List `/gateway` directory <!-- id: 10 -->
+    - [x] Analyze key gateway files (config, routing, auth) <!-- id: 11 -->
+    - [x] Identify missing components in gateway <!-- id: 12 -->
+- [ ] Analyze capabilities for "Self-learning RAG" <!-- id: 13 -->
+    - [x] Inspect `backend/src/ai_core/agents` for reasoning capabilities <!-- id: 14 -->
+    - [x] Inspect `backend/src/ai_core/evaluator` for auto-tuning capabilities <!-- id: 15 -->
+    - [x] Create Advisory Report <!-- id: 16 -->
+
+# Phase 1: Frontend Foundation
+- [ ] Plan Frontend Refactor <!-- id: 17 -->
+# Task: Analyze Repository and Identify Missing Components
+
+- [ ] Analyze `/backend` structure and contents <!-- id: 0 -->
+    - [x] List root directory <!-- id: 1 -->
+    - [x] List `/backend` directory <!-- id: 2 -->
+    - [x] Analyze key backend files (dependencies, entry points, config) <!-- id: 3 -->
+    - [x] Identify missing components in backend (tests, docs, error handling, etc.) <!-- id: 4 -->
+- [ ] Analyze `/frontend` structure and contents <!-- id: 5 -->
+    - [x] List `/frontend` directory <!-- id: 6 -->
+    - [x] Analyze key frontend files (package.json, config, entry points) <!-- id: 7 -->
+    - [x] Identify missing components in frontend (tests, docs, linting, etc.) <!-- id: 8 -->
+- [ ] Analyze `/gateway` structure and contents <!-- id: 9 -->
+    - [x] List `/gateway` directory <!-- id: 10 -->
+    - [x] Analyze key gateway files (config, routing, auth) <!-- id: 11 -->
+    - [x] Identify missing components in gateway <!-- id: 12 -->
+- [ ] Analyze capabilities for "Self-learning RAG" <!-- id: 13 -->
+    - [x] Inspect `backend/src/ai_core/agents` for reasoning capabilities <!-- id: 14 -->
+    - [x] Inspect `backend/src/ai_core/evaluator` for auto-tuning capabilities <!-- id: 15 -->
+    - [x] Create Advisory Report <!-- id: 16 -->
+
+# Phase 1: Frontend Foundation
+- [ ] Plan Frontend Refactor <!-- id: 17 -->
+    - [x] Create Implementation Plan <!-- id: 18 -->
+    - [x] User Approval <!-- id: 19 -->
+- [/] Implement Components <!-- id: 20 -->
+    - [x] Create `types/chat.ts` <!-- id: 21 -->
+    - [x] Create `FeedbackActions.tsx` <!-- id: 22 -->
+    - [x] Create `ReasoningAccordion.tsx` <!-- id: 23 -->
+    - [x] Create `ChatMessage.tsx` <!-- id: 24 -->
+- [x] Refactor Chat Page <!-- id: 25 -->
+    - [x] Update `chat.tsx` to use new components <!-- id: 26 -->
+- [x] Verify Changes <!-- id: 27 -->
+    - [x] Manual UI Testing (Build Passed) <!-- id: 28 -->
+
+# Phase 2: The Brain (LLM Agents)
+- [x] Plan Phase 2 <!-- id: 29 -->
+    - [x] Create Implementation Plan <!-- id: 30 -->
+    - [x] User Approval <!-- id: 31 -->
+- [x] Implement LLM Agent <!-- id: 32 -->
+    - [x] Create `LLMAgent` class with ReAct loop <!-- id: 33 -->
+    - [x] Implement Tool Execution Logic <!-- id: 34 -->
+    - [x] Add Reflection/Self-Correction Step <!-- id: 35 -->
+- [x] Integrate & Verify <!-- id: 36 -->
+    - [x] Replace `SampleAgent` or add as alternative <!-- id: 37 -->
+    - [x] Create Test Suite for Agents <!-- id: 38 -->
+
+# Phase 3: Self-Learning (Feedback Loop)
+- [x] Plan Phase 3 <!-- id: 39 -->
+    - [x] Create Implementation Plan <!-- id: 40 -->
+    - [x] User Approval <!-- id: 41 -->
+- [x] Implement Golden Dataset Generator <!-- id: 42 -->
+    - [x] Create API/Script to export positive feedback <!-- id: 43 -->
+    - [x] Format as `suite.py` compatible JSON <!-- id: 44 -->
+- [x] Implement Auto-Tuner <!-- id: 45 -->
+    - [x] Create `auto_tuner.py` script <!-- id: 46 -->
+    - [x] Implement grid search for RAG parameters <!-- id: 47 -->
+    - [x] Integrate with `suite.py` for evaluation <!-- id: 48 -->
+- [x] Verify Self-Learning Loop <!-- id: 49 -->
+    - [x] Test Feedback -> Dataset -> Auto-Tune flow <!-- id: 50 -->
+
+# Phase 4: Gap Filling
+- [/] Implement Dynamic System Prompts (G.1) <!-- id: 51 -->
+    - [ ] Modify `LLMClient` to accept system prompt <!-- id: 52 -->
+    - [ ] Modify `RAGPipeline` to load from Tenant settings <!-- id: 53 -->
+    - [ ] Verify with `debug_system_prompt.py` <!-- id: 54 -->
+- [x] Implement Document-Level RBAC (R.4) <!-- id: 55 -->
+    - [x] Update `QdrantService` for ID filtering <!-- id: 56 -->
+    - [x] Update `RAGPipeline` to pass user permissions <!-- id: 57 -->
+- [ ] Implement Adaptive Router Learning (L.2) <!-- id: 58 -->
+    - [ ] Create training job for router <!-- id: 59 -->
+

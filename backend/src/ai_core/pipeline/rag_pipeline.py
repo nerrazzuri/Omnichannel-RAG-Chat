@@ -51,6 +51,7 @@ class RAGPipeline:
         preselected_contexts: Optional[List[str]] = None,
         db: Any = None,
         user_id: Optional[str] = None,
+        role: Optional[str] = None,
         channel: Optional[str] = "web",
         correlation_id: Optional[str] = None,
         auth_type: Optional[str] = None,
@@ -138,6 +139,8 @@ class RAGPipeline:
             db=db,
             preselected_contexts=preselected_contexts,
             expansion_terms=expanded.get("expanded_terms", []),
+            user_id=user_id,
+            role=role,
         )
 
         fused = self.fusion.fuse(

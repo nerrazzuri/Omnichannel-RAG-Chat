@@ -9,8 +9,47 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_storage:
+  vault_agent_out:
 
 services:
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: vault
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    command: server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - backend_net
+
+  vault-seed:
+    image: curlimages/curl:8.7.1
+    container_name: vault-seed
+    depends_on:
+      vault:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "Seeding Vault KV v2 at secret/ai_core and secret/shared..."
+        # Seed ai_core secrets (JWT + OpenAI)
+        curl -sS -H "X-Vault-Token: root" -H "Content-Type: application/json" \
+          --data "{\"data\":{\"JWT_SECRET\":\"${JWT_SECRET:-dev-secret-change-me-please-32-bytes-minimum}\",\"OPENAI_API_KEY\":\"${OPENAI_API_KEY:-}\"}}" \
+          http://vault:8200/v1/secret/data/ai_core | cat
+        # Also seed shared path used by Vault Agent template for gateway
+        curl -sS -H "X-Vault-Token: root" -H "Content-Type: application/json" \
+          --data "{\"data\":{\"JWT_SECRET\":\"${JWT_SECRET:-dev-secret-change-me-please-32-bytes-minimum}\"}}" \
+          http://vault:8200/v1/secret/data/shared | cat
+        echo "Done."
+        sleep 1
+    restart: "no"
+    networks:
+      - backend_net
+
   postgresql:
     image: postgres:15-alpine
     environment:
@@ -65,10 +104,20 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - RAG_EMBED_MODEL=text-embedding-3-large
       - RAG_CHAT_MODEL=gpt-4o-mini
+      # Enable Vault-backed secrets (JWT_SECRET, OPENAI_API_KEY)
+      - VAULT_ENABLED=1
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=root
+      - VAULT_MOUNT_PATH=secret/data/ai_core
+      # Optional dev bypass (keep for local convenience)
       - JWT_SECRET=${JWT_SECRET}
       - AUTH_ALLOW_ALL=1
       - AUTH_BYPASS_TENANT=00000000-0000-0000-0000-000000000001
     depends_on:
+      vault:
+        condition: service_started
+      vault-seed:
+        condition: service_completed_successfully
       postgresql:
         condition: service_healthy
       redis:
@@ -94,6 +143,7 @@ services:
       - "3001:3001"
     environment:
       - AI_CORE_URL=http://ai-core:8000
+      # Read JWT secret from env (matching Vault-seed value)
       - JWT_SECRET=${JWT_SECRET}
       - REDIS_URL=redis://redis:6379/0
       - AUTH_ALLOW_ALL=1
@@ -104,7 +154,7 @@ services:
     volumes:
       - ./gateway/src:/app/src:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/ready"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -122,6 +172,7 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:3001/api
       - NEXT_PUBLIC_AI_CORE_URL=http://localhost:8000
       - AI_CORE_URL=http://ai-core:8000
+      - NEXT_GATEWAY_ORIGIN=http://gateway:3001
     depends_on:
       gateway:
         condition: service_healthy
@@ -132,5 +183,6 @@ services:
       retries: 3
     networks:
       - frontend_net
+      - backend_net
 
 

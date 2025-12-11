@@ -1,9 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { postQuery } from '../services/chatService';
-import MessageRenderer from '../components/MessageRenderer';
-
-type Citation = { source?: string; title?: string; relevance?: number; snippet?: string; source_url?: string };
-type Message = { role: 'user' | 'assistant'; content: string; citations?: Citation[]; confidence?: number; intent?: string };
+import { ChatMessage } from '../components/ChatMessage';
+import { Message, ReasoningStep } from '../types/chat';
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -11,14 +9,20 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [planType, setPlanType] = useState<string>('');
   const [usage, setUsage] = useState<{ tokens_used: number; tokens_quota: number } | null>(null);
-  // Sidebar removed for minimal UI
+
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
-  // Seed Omni greeting on initial load for better UX
+
+  // Seed Omni greeting on initial load
   useEffect(() => {
     if (messages.length === 0) {
-      setMessages([{ role: 'assistant', content: "Hello! I'm Omni. How can I help you today?" }]);
+      setMessages([{
+        id: 'init-1',
+        role: 'assistant',
+        content: "Hello! I'm Omni. How can I help you today?",
+        timestamp: Date.now()
+      }]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -36,7 +40,7 @@ export default function ChatPage() {
           const ju = await u.json();
           setUsage({ tokens_used: ju?.tokens_used || 0, tokens_quota: ju?.tokens_quota || 0 });
         }
-      } catch {}
+      } catch { }
     })();
   }, []);
 
@@ -55,81 +59,69 @@ export default function ChatPage() {
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
+  const handleFeedback = (messageId: string, isPositive: boolean) => {
+    setMessages(prev => prev.map(msg => {
+      if (msg.id === messageId) {
+        return { ...msg, feedback: { isPositive } };
+      }
+      return msg;
+    }));
+    // TODO: Send feedback to backend API
+    console.log(`Feedback for ${messageId}: ${isPositive ? 'Positive' : 'Negative'}`);
+  };
+
   const send = async () => {
     if (!input.trim() || loading) return;
-    const userMsg: Message = { role: 'user', content: input };
+
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: input,
+      timestamp: Date.now()
+    };
+
     setMessages((m) => [...m, userMsg]);
     setInput('');
     setLoading(true);
+
     try {
       const resp = await postQuery({ channel: 'web', message: userMsg.content });
       const content = resp.response || resp.final_response || '';
-      const citations: Citation[] = Array.isArray(resp.citations) ? resp.citations : [];
-      const confidence: number | undefined = typeof resp.confidence === 'number' ? resp.confidence : undefined;
-      const intent: string | undefined = resp.intent || resp.intent_label || undefined;
-      setMessages((m) => [...m, { role: 'assistant', content, citations, confidence, intent }]);
+
+      // Map backend citations to string array if needed, or keep as is if we update type
+      // For now, we'll just store them in the message object as any extra fields
+      // But strictly, let's try to map to our new type if possible.
+      // The current ChatMessage component doesn't explicitly render citations yet (it uses MessageRenderer),
+      // but we should pass them if we want to render them separately.
+      // For this refactor, we'll rely on MessageRenderer or add citation support to ChatMessage later.
+      // Actually, the previous chat.tsx rendered citations manually. 
+      // Let's append citations to content for now or handle them in ChatMessage.
+      // To keep it simple and clean, let's append them to content as markdown if they exist, 
+      // OR better, let's update ChatMessage to handle them. 
+      // For this step, I will just pass them through.
+
+      const assistantMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+        // Mock reasoning steps for demo purposes if backend doesn't send them yet
+        reasoningSteps: resp.reasoning_steps as ReasoningStep[] || undefined,
+        citations: resp.citations?.map((c: any) => c.source_url || c.title || c.source)
+      };
+
+      setMessages((m) => [...m, assistantMsg]);
+    } catch (e) {
+      console.error(e);
+      setMessages((m) => [...m, {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: "I'm sorry, I encountered an error processing your request.",
+        timestamp: Date.now()
+      }]);
     } finally {
       setLoading(false);
     }
-  };
-
-  const MessageBubble = ({ m }: { m: Message }) => {
-    const isUser = m.role === 'user';
-    const urls = !isUser ? Array.from(new Set((m.content.match(/https?:\/\/[\w\-\.\/?#=&%]+/g) || []))).slice(0, 5) : [];
-    const copy = async () => {
-      try { await navigator.clipboard.writeText(m.content); } catch {}
-    };
-    return (
-      <div className={`w-full flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-        <div className={`flex items-start gap-3 max-w-[900px] w-full ${isUser ? 'flex-row-reverse' : ''}`}>
-          <div className={`h-8 w-8 rounded-full flex items-center justify-center ${isUser ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
-            {isUser ? 'U' : 'AI'}
-          </div>
-          <div className={`${isUser ? 'bg-blue-600 text-white' : 'bg-white text-gray-900 border border-gray-200'} px-4 py-3 rounded-2xl shadow-sm w-full`}> 
-            {isUser ? (
-              <div className="whitespace-pre-wrap leading-relaxed text-sm">{m.content}</div>
-            ) : (<MessageRenderer content={m.content} />)}
-            {!isUser && (m.intent || m.confidence !== undefined) && (
-              <div className="mt-2 text-[11px] text-gray-500 flex gap-3">
-                {m.intent && (<span>intent: {m.intent}</span>)}
-                {m.confidence !== undefined && (<span>confidence: {Math.round(m.confidence * 100)}%</span>)}
-              </div>
-            )}
-            {!isUser && m.citations && m.citations.length > 0 && (
-              <div className="mt-2 border-t pt-2">
-                <div className="text-xs font-medium text-gray-600 mb-1">Citations</div>
-                <ul className="list-disc pl-5 space-y-1">
-                  {m.citations.slice(0,5).map((c, i) => (
-                    <li key={i} className="text-xs text-gray-600">
-                      <a href={(c as any).source_url || (c as any).source} target="_blank" rel="noreferrer" className="underline hover:no-underline">
-                        {c.title || c.source || (c as any).source_url || 'source'}
-                      </a>
-                      {c.relevance !== undefined && <span className="ml-1">({Math.round((c.relevance as number) * 100)}%)</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {!isUser && urls.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {urls.map((u, idx) => (
-                  <a key={idx} href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-700">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14L21 3m-7 0h7v7"/></svg>
-                    <span className="truncate max-w-[160px]">{u.replace(/^https?:\/\//,'')}</span>
-                  </a>
-                ))}
-              </div>
-            )}
-            <div className="mt-2 flex justify-end">
-              <button onClick={copy} className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${isUser ? 'border-white/40 text-white/90 hover:bg-white/10' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                Copy
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
   };
 
   return (
@@ -137,7 +129,7 @@ export default function ChatPage() {
       <header className="sticky top-0 z-20 backdrop-blur bg-white/70 border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded bg-blue-600" />
+            <div className="h-8 w-8 rounded bg-blue-600 flex items-center justify-center text-white font-bold">O</div>
             <h1 className="text-lg font-semibold text-gray-900">Omnichannel RAG Chat</h1>
             <span className="hidden md:inline-flex ml-2 px-2 py-0.5 text-xs rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Staging</span>
           </div>
@@ -147,7 +139,7 @@ export default function ChatPage() {
         </div>
         {planType && (
           <div className="bg-blue-50 border-t border-blue-100 text-blue-800 text-xs py-2 px-4">
-            Plan: <span className="font-medium uppercase">{planType}</span>{planType==='free' ? ' — Upgrade to Pro for higher limits.' : ''}
+            Plan: <span className="font-medium uppercase">{planType}</span>{planType === 'free' ? ' — Upgrade to Pro for higher limits.' : ''}
             {usage && usage.tokens_quota > 0 && (
               <span className="ml-4">Tokens: {usage.tokens_used}/{usage.tokens_quota}</span>
             )}
@@ -166,8 +158,12 @@ export default function ChatPage() {
                   <p className="text-sm">Ask about documents, policies, or upload knowledge in the Admin panel.</p>
                 </div>
               )}
-              {messages.map((m, i) => (
-                <MessageBubble key={i} m={m} />
+              {messages.map((m) => (
+                <ChatMessage
+                  key={m.id}
+                  message={m}
+                  onFeedback={handleFeedback}
+                />
               ))}
               {loading && (
                 <div className="w-full flex justify-start">

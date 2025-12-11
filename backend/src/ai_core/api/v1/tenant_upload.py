@@ -17,6 +17,7 @@ from ai_core.services.document_service import DocumentService
 from shared.database.session import get_db
 from ai_core.api.deps import require
 from shared.cache.redis import redis_cache
+import json
 
 router = APIRouter(prefix="/v1/tenant", tags=["tenant"])
 
@@ -28,23 +29,30 @@ def upload_document(
     claims=Depends(require("ingestion:write", resource={"classification": "internal"})),
     db: Session = Depends(get_db),
 ) -> DocumentUploadResponse:
-    # Enforce tenant header
-    header_tid = request.headers.get("X-Tenant-ID")
-    if not header_tid or str(header_tid) != str(body.tenant_id):
-        raise HTTPException(status_code=403, detail="Tenant header mismatch")
-    # Cross-tenant enforcement
-    if str(claims.get("role")) != "ADMIN" and str(body.tenant_id) != str(
-        claims.get("tenant_id")
-    ):
+    # Derive tenant strictly from claims; ignore client-controlled tenant overrides
+    claims_tenant = str(claims.get("tenant_id") or "").strip()
+    if not claims_tenant:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+    if body.tenant_id and str(body.tenant_id) != claims_tenant:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
-    if not body.tenant_id or not body.title or not body.content:
+    body.tenant_id = claims_tenant
+
+    if not body.title or not body.content:
         raise HTTPException(
             status_code=400, detail="Missing tenantId, title or content"
         )
     kb_id = body.knowledge_base_id or "00000000-0000-0000-0000-000000000000"
     svc = DocumentService(db)
+    # Build ACL/meta
+    doc_meta = {}
+    if body.access:
+        doc_meta["access"] = body.access
+    if body.owner_user_id:
+        doc_meta["owner_user_id"] = body.owner_user_id
+    if body.allowed_user_ids:
+        doc_meta["allowed_user_ids"] = body.allowed_user_ids
     doc_id, chunk_count = svc.process_and_store(
-        body.tenant_id, body.title, body.content, kb_id
+        body.tenant_id, body.title, body.content, kb_id, progress_job_id=None, doc_meta=doc_meta
     )
     return DocumentUploadResponse(
         documentId=doc_id, chunkCount=chunk_count, status="INDEXED"
@@ -57,21 +65,22 @@ async def upload_document_file(
     title: str = Form(...),
     knowledgeBaseId: str = Form("00000000-0000-0000-0000-000000000000"),
     jobId: str = Form(None),
+    # Optional RBAC form fields
+    access: str = Form("tenant"),
+    ownerUserId: str = Form(None),
+    allowedUserIds: str = Form(None, description="JSON array of user IDs"),
     file: UploadFile = File(...),
     request: Request = None,
     claims=Depends(require("ingestion:write", resource={"classification": "internal"})),
     db: Session = Depends(get_db),
 ):
-    # Enforce tenant header
-    if request:
-        header_tid = request.headers.get("X-Tenant-ID")
-        if not header_tid or str(header_tid) != str(tenantId):
-            raise HTTPException(status_code=403, detail="Tenant header mismatch")
-    # Cross-tenant enforcement
-    if str(claims.get("role")) != "ADMIN" and str(tenantId) != str(
-        claims.get("tenant_id")
-    ):
+    # Derive tenant strictly from claims; reject mismatches
+    claims_tenant = str(claims.get("tenant_id") or "").strip()
+    if not claims_tenant:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+    if str(tenantId) != claims_tenant:
         raise HTTPException(status_code=403, detail="Tenant mismatch")
+    tenantId = claims_tenant
     try:
         # Validate inputs
         if not tenantId:
@@ -81,7 +90,7 @@ async def upload_document_file(
         if not file:
             raise HTTPException(status_code=400, detail="file is required")
 
-        # Validate tenant ID format
+        # Validate tenant ID format (claims-derived)
         import uuid
 
         try:
@@ -136,8 +145,21 @@ async def upload_document_file(
                     status_code=400,
                     detail="No text content could be extracted from the file",
                 )
+            # Build ACL/meta from form
+            doc_meta = {}
+            if access:
+                doc_meta["access"] = access
+            if ownerUserId:
+                doc_meta["owner_user_id"] = ownerUserId
+            if allowedUserIds:
+                try:
+                    parsed = json.loads(allowedUserIds)
+                    if isinstance(parsed, list):
+                        doc_meta["allowed_user_ids"] = parsed
+                except Exception:
+                    pass
             doc_id, chunk_count = svc.process_and_store(
-                tenantId, title, extracted, knowledgeBaseId, progress_job_id=jobId
+                tenantId, title, extracted, knowledgeBaseId, progress_job_id=jobId, doc_meta=doc_meta
             )
 
         return DocumentUploadResponse(
@@ -172,3 +194,5 @@ def upload_status(tenantId: str = Query(...), jobId: str = Query(...)) -> dict:
         return {"jobId": jobId, **data}
     except Exception:
         return {"jobId": jobId, "phase": "unknown", "progress": 0}
+
+

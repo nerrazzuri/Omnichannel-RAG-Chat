@@ -3,6 +3,7 @@ Query API router integrating conversation and RAG services.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from ai_core.models.message import QueryRequest, QueryResponse
 from ai_core.services.conversation_service import ConversationService
 from ai_core.pipeline.rag_pipeline import RAGPipeline
@@ -31,18 +32,22 @@ def post_query(
     claims=Depends(require("retrieval:read", resource={"classification": "internal"})),
     db: Session = Depends(get_db),
 ) -> QueryResponse:
-    if not payload.tenant_id or not payload.message or not payload.channel:
+    # Only message and channel are strictly required; tenant will be derived from claims
+    if not payload.message or not payload.channel:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing required fields: tenantId, message, channel",
+            detail="Missing required fields: message, channel",
         )
 
-    # Enforce tenant header + cross-tenant for non-admins
-    header_tid = request.headers.get("X-Tenant-ID")
-    if not header_tid:
-        raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
-    if str(header_tid) != str(payload.tenant_id):
-        raise HTTPException(status_code=403, detail="Tenant header mismatch")
+    # Derive tenant strictly from authenticated claims (never trust client-controlled fields)
+    claims_tenant = str(claims.get("tenant_id") or "").strip()
+    if not claims_tenant:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+    # If client sent a tenantId, ensure it matches claims to prevent confused-deputy issues
+    if payload.tenant_id and str(payload.tenant_id) != claims_tenant:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+    # Use claims tenant downstream
+    payload.tenant_id = claims_tenant
     # Cross-tenant enforcement for non-admins
     try:
         if str(claims.get("role")) != "ADMIN" and str(payload.tenant_id) != str(
@@ -228,6 +233,32 @@ def post_query(
     try:
         if str(claims.get("role")) != "ADMIN":
             q = q.filter(Document.meta["classification"].astext != "restricted")
+            # Document-level RBAC:
+            # Allow docs with access in {tenant, public} or owned by the requesting user
+            try:
+                q = q.filter(
+                    or_(
+                        Document.meta["access"].astext.is_(None),
+                        Document.meta["access"].astext.in_(["tenant", "public"]),
+                        Document.meta["owner_user_id"].astext == str(user_uuid),
+                    )
+                )
+                try:
+                    logging.getLogger("ai_core").info(
+                        "rbac_filter_applied",
+                        extra={
+                            "tenant_id": str(tenant_uuid),
+                            "user_id": str(user_uuid),
+                            "plan_type": plan_label,
+                            "feature": "retrieval",
+                            "action": "rbac_filter",
+                        },
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                # If JSON filter not supported, proceed with classification-only
+                pass
     except Exception:
         pass
     rows = q.order_by(KnowledgeChunk.created_at.desc()).limit(2000).all()
@@ -717,6 +748,7 @@ def post_query(
                 preselected_contexts=preselected_np,
                 db=db,
                 user_id=str(claims.get("user_id") or user_uuid),
+                role=str(claims.get("role")) if claims and claims.get("role") else None,
             )
             conversation_service.add_message(
                 conversation, sender_type="SYSTEM", content=result_np["response"]
@@ -1022,6 +1054,7 @@ def post_query(
         preselected_contexts=preselected,
         db=db,
         user_id=str(claims.get("user_id") or user_uuid),
+        role=str(claims.get("role")) if claims and claims.get("role") else None,
         correlation_id=correlation_id,
         auth_type=auth_type,
         api_key_id=api_key_id,

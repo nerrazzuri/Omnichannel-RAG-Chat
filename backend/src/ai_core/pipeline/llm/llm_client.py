@@ -17,6 +17,7 @@ class LLMClient:
     def __init__(self) -> None:
         api_key = secret_manager.get("OPENAI_API_KEY")
         self.client = OpenAI(api_key=api_key) if api_key else None
+        self._tenant_clients: Dict[str, OpenAI] = {}
         self.model = os.getenv("LLM_MODEL") or os.getenv(
             "RAG_CHAT_MODEL", "gpt-4o-mini"
         )
@@ -36,6 +37,17 @@ class LLMClient:
         result_hint: str | None = None,
         tenant_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # Choose client: prefer per-tenant BYO key when available
+        client = self.client
+        try:
+            if tenant_id:
+                tkey = secret_manager.get_tenant_secret(tenant_id, "OPENAI_API_KEY")
+                if tkey:
+                    if tenant_id not in self._tenant_clients:
+                        self._tenant_clients[tenant_id] = OpenAI(api_key=tkey)
+                    client = self._tenant_clients[tenant_id]
+        except Exception:
+            pass
         prompt = self._orchestrator.build_prompt(
             intent=intent,
             query=query,
@@ -53,7 +65,7 @@ class LLMClient:
                 }
             else:
                 cost_metrics.miss(tenant_id, "gen")
-        if not self.client:
+        if not client:
             # Local heuristic summarization fallback (no external calls)
             text = self._local_summarize(
                 contexts or [result_hint or ""], intent=intent, result_hint=result_hint
@@ -67,7 +79,7 @@ class LLMClient:
 
         @retry_with_backoff("openai.chat")
         def _do_chat() -> dict:
-            completion = self.client.chat.completions.create(
+            completion = client.chat.completions.create(
                 model=self.model,
                 temperature=self.temperature,
                 messages=[

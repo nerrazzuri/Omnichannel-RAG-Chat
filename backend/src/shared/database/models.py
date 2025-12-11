@@ -65,6 +65,13 @@ class Tenant(Base):
     domain = Column(String(255), unique=True, nullable=False)
     subscription_tier = Column(String(50), default="BASIC")
     settings = Column(JSON, default=dict)
+    # Whitelabel / Custom Domain fields
+    custom_domain = Column(String(255))  # e.g., ai.company.com
+    custom_domain_status = Column(String(32), default="none")  # none|pending_dns|pending_tls|active|error
+    ssl_cert_secret = Column(String(255))  # K8s secret name for issued cert
+    brand_assets_uri = Column(String(500))  # bucket/URL containing logo, favicon, colors.json
+    oauth_redirect_uris = Column(JSON, default=list)  # list of redirect URIs derived from domain
+    csp_exceptions = Column(JSON, default=list)  # optional allowlist for 3rd-party assets
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 

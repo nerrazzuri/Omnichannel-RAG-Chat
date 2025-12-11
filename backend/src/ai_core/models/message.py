@@ -16,7 +16,8 @@ class Citation(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    tenant_id: str = Field(..., alias="tenantId")
+    # Tenant is derived from authenticated claims; accept alias for backward compatibility
+    tenant_id: Optional[str] = Field(None, alias="tenantId")
     user_id: Optional[str] = Field(None, alias="userId")
     channel: ChannelName
     message: str

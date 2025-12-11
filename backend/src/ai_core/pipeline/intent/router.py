@@ -344,8 +344,13 @@ class HybridContextualRouter:
         if provider == "remote":
             try:
                 from openai import OpenAI
+                from shared.security.secret_manager import secret_manager
 
-                api_key = os.getenv("OPENAI_API_KEY")
+                tenant_id = str(context.get("tenant_id") or "")
+                api_key = None
+                if tenant_id:
+                    api_key = secret_manager.get_tenant_secret(tenant_id, "OPENAI_API_KEY")
+                api_key = api_key or secret_manager.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
                 client = OpenAI(api_key=api_key) if api_key else None
                 if not client:
                     raise RuntimeError("OpenAI client not configured")
@@ -418,13 +423,34 @@ class HybridContextualRouter:
             return "rule"
 
     def _load_tenant_catalog(self, tenant_id: str) -> Dict[str, List[str]]:
-        # For now, load from default; could read DB/JSON in future
+        # Load from cache or merge default with per-tenant overrides from JSON
         cached = self._tenant_cache.get(tenant_id)
         if cached and cached.get("catalog"):
             return cached["catalog"]
         cat = {k: list(v) for k, v in self.default_catalog.items()}
+        overrides_used = False
+        try:
+            import json
+            from pathlib import Path
+
+            base_dir = os.getenv("INTENT_CATALOG_DIR", "data/intent_catalog")
+            path = Path(base_dir) / f"{tenant_id}.json"
+            if path.is_file():
+                with path.open("r", encoding="utf-8") as f:
+                    tenant_cat = json.load(f)
+                if isinstance(tenant_cat, dict):
+                    for intent, phrases in tenant_cat.items():
+                        if isinstance(intent, str) and isinstance(phrases, list):
+                            # extend or create
+                            cat.setdefault(intent, [])
+                            for p in phrases:
+                                if isinstance(p, str) and p and p not in cat[intent]:
+                                    cat[intent].append(p)
+                    overrides_used = True
+        except Exception:
+            overrides_used = False
         self._tenant_cache.setdefault(tenant_id, {})["catalog"] = cat
-        self._tenant_cache[tenant_id]["overrides"] = False
+        self._tenant_cache[tenant_id]["overrides"] = overrides_used
         return cat
 
     @staticmethod

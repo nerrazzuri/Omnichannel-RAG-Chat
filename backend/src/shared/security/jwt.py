@@ -19,6 +19,8 @@ class JWTService:
         self.algorithm = "HS256"
         self.access_token_expire_minutes = int(os.getenv("JWT_EXPIRES_MINUTES", "60"))
         self.refresh_token_expire_days = 7
+        self.issuer = os.getenv("JWT_ISSUER", "omnichannel-chatbot")
+        self.audience = os.getenv("JWT_AUDIENCE", None)
         # Enforce strong secret in non-dev environments
         env = os.getenv("ENV", "dev").lower()
         if env not in ("dev", "local", "test"):
@@ -88,12 +90,13 @@ class JWTService:
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify and decode a JWT token."""
         try:
-            payload = jwt.decode(
-                token,
-                self.secret_key,
-                algorithms=[self.algorithm],
-                issuer="omnichannel-chatbot",
-            )
+            kwargs: Dict[str, Any] = {
+                "algorithms": [self.algorithm],
+                "issuer": self.issuer,
+            }
+            if self.audience:
+                kwargs["audience"] = self.audience
+            payload = jwt.decode(token, self.secret_key, **kwargs)
 
             # Validate token type
             token_type = payload.get("type")

@@ -15,13 +15,21 @@ class DenseRetriever:
         tenant_id: str,
         top_k: int = 8,
         emb: Optional[List[float]] = None,
+        user_id: Optional[str] = None,
+        role: Optional[str] = None,
+        allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         e = emb if emb is not None else self._emb.embed_query(query, tenant_id)
         if not e:
             return []
         try:
             results = qdrant_service.search_similar_chunks(
-                query_embedding=e, tenant_id=tenant_id, top_k=top_k
+                query_embedding=e,
+                tenant_id=tenant_id,
+                top_k=top_k,
+                user_id=user_id,
+                role=role,
+                allowed_document_ids=allowed_document_ids,
             )
             rich: List[Dict[str, Any]] = []
             for r in results:

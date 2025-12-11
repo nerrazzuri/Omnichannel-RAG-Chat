@@ -7,16 +7,17 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import os
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 from fastapi import Response
 from ai_core.api.v1.query import router as query_router
 from ai_core.api.webhooks.whatsapp import router as whatsapp_router
 from ai_core.api.webhooks.teams import router as teams_router
 from ai_core.api.webhooks.telegram import router as telegram_router
 from ai_core.api.v1.internal import router as internal_router
-from ai_core.api.v1.tenant import router as tenant_router
+from ai_core.api.v1.tenant_upload import router as tenant_router
 from ai_core.api.v1.tenant.plan import router as tenant_plan_router
 from ai_core.api.v1.tenant.usage import router as tenant_usage_router
+from ai_core.api.v1.tenant.branding import router as tenant_branding_router
 from .api.v1.reranker import router as reranker_router
 from ai_core.api.v1.admin.api_keys import router as apikey_router
 from ai_core.api.v1.admin.rerank import router as rerank_admin_router
@@ -31,6 +32,7 @@ from ai_core.api.v1.admin.tenants import router as tenants_admin_router
 from ai_core.api.v1.admin.tenant_manager import router as tenant_manager_router
 from ai_core.api.v1.feedback import router as feedback_router
 from ai_core.api.v1.agent.approvals import router as approvals_router
+from ai_core.api.v1.agent.chat import router as agent_chat_router
 from shared.database.session import create_tables, SessionLocal
 from shared.database.models import Tenant
 import uuid
@@ -122,6 +124,7 @@ try:
         for key in (
             "JWT_SECRET",
             "OPENAI_API_KEY",
+            "FILE_SIGNING_SECRET",
             "DB_PASSWORD",
             "QDRANT_API_KEY",
             "REDIS_PASSWORD",
@@ -170,10 +173,38 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
-REQUEST_COUNT = Counter(
+def _get_or_reuse_counter(name: str, help_text: str, labelnames=None) -> Counter:
+    try:
+        return Counter(name, help_text, labelnames or [])
+    except ValueError as e:
+        if "Duplicated timeseries" in str(e):
+            try:
+                existing = getattr(REGISTRY, "_names_to_collectors", {}).get(name)
+                if isinstance(existing, Counter):
+                    return existing  # type: ignore[return-value]
+            except Exception:
+                pass
+        raise
+
+
+def _get_or_reuse_histogram(name: str, help_text: str, labelnames=None) -> Histogram:
+    try:
+        return Histogram(name, help_text, labelnames or [])
+    except ValueError as e:
+        if "Duplicated timeseries" in str(e):
+            try:
+                existing = getattr(REGISTRY, "_names_to_collectors", {}).get(name)
+                if isinstance(existing, Histogram):
+                    return existing  # type: ignore[return-value]
+            except Exception:
+                pass
+        raise
+
+
+REQUEST_COUNT = _get_or_reuse_counter(
     "ai_core_requests_total", "Total HTTP requests", ["method", "endpoint", "status"]
 )
-REQUEST_LATENCY = Histogram(
+REQUEST_LATENCY = _get_or_reuse_histogram(
     "ai_core_request_latency_seconds", "Request latency", ["endpoint"]
 )
 
@@ -783,11 +814,13 @@ app.include_router(telegram_router)
 app.include_router(tenant_router)
 app.include_router(tenant_plan_router)
 app.include_router(tenant_usage_router)
+app.include_router(tenant_branding_router)
 app.include_router(reranker_router)
 app.include_router(apikey_router)
 app.include_router(rerank_admin_router)
 app.include_router(feedback_router)
 app.include_router(approvals_router)
+app.include_router(agent_chat_router)
 app.include_router(backup_admin_router)
 app.include_router(restore_admin_router)
 app.include_router(retention_admin_router)

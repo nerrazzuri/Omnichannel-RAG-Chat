@@ -15,11 +15,21 @@ import os
 import time
 import logging
 from shared.config.tuning import db_pool
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
 # Database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
+_TENANT_CTX: ContextVar[str | None] = ContextVar("_TENANT_CTX", default=None)
+
+
+def set_tenant_context(tenant_id: str | None) -> None:
+    """Set per-request tenant context for DB (used by RLS: app.tenant_id)."""
+    try:
+        _TENANT_CTX.set(str(tenant_id) if tenant_id else None)
+    except Exception:
+        pass
 
 
 def _create_engine_for_url(url: str):
@@ -137,6 +147,14 @@ def get_db() -> Session:
             SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
             db.close()
             db = SessionLocal()
+        # Set per-request tenant for PostgreSQL RLS (SET LOCAL app.tenant_id = ...)
+        try:
+            if not DATABASE_URL.startswith("sqlite"):
+                tid = _TENANT_CTX.get()
+                if tid:
+                    db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tid})
+        except Exception:
+            pass
         yield db
     finally:
         db.close()

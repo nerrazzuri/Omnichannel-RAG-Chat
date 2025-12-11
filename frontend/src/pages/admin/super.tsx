@@ -32,6 +32,7 @@ export default function SuperAdmin() {
   const [gwHealth, setGwHealth] = useState<string>('unknown');
   const [coreHealth, setCoreHealth] = useState<string>('unknown');
   const [compliance, setCompliance] = useState<any | null>(null);
+  const grafana = process.env.NEXT_PUBLIC_GRAFANA_URL || '';
 
   const [newTenantName, setNewTenantName] = useState('');
   const [newTenantDomain, setNewTenantDomain] = useState('');
@@ -171,7 +172,7 @@ export default function SuperAdmin() {
         const { getGatewayHealth, getAiCoreHealth, getComplianceSummary } = await import('../../services/adminService');
         const gh = await getGatewayHealth();
         setGwHealth(gh.ok ? 'ready' : `err ${gh.status}`);
-        const ch = await getAiCoreHealth(apiBase);
+        const ch = await getAiCoreHealth();
         setCoreHealth(ch.ok ? 'ready' : `err ${ch.status}`);
         try {
           const cs = await getComplianceSummary({ apiBase, token });
@@ -295,9 +296,14 @@ export default function SuperAdmin() {
               <div className="border rounded p-3">
                 <div className="text-gray-500">Service Health</div>
                 <div className="mt-1">
-                  <div>Gateway: <span className={gwHealth==='ready' ? 'text-emerald-700' : 'text-rose-700'}>{gwHealth}</span></div>
-                  <div>AI-Core: <span className={coreHealth==='ready' ? 'text-emerald-700' : 'text-rose-700'}>{coreHealth}</span></div>
+                  <div>Gateway: <span className={gwHealth === 'ready' ? 'text-emerald-700' : 'text-rose-700'}>{gwHealth}</span></div>
+                  <div>AI-Core: <span className={coreHealth === 'ready' ? 'text-emerald-700' : 'text-rose-700'}>{coreHealth}</span></div>
                 </div>
+                {grafana && (
+                  <div className="mt-2">
+                    <a className="text-blue-600 underline" href={`${grafana}/d/Release_Readiness/Release_Readiness?var-tenant=${encodeURIComponent(tenantId)}`} target="_blank" rel="noreferrer">Grafana: Release Readiness</a>
+                  </div>
+                )}
               </div>
               <div className="border rounded p-3 col-span-2">
                 <div className="text-gray-500">Compliance</div>
@@ -375,4 +381,22 @@ export default function SuperAdmin() {
   );
 }
 
+
+export async function getServerSideProps(ctx: any) {
+  try {
+    const token = ctx.req.cookies?.auth_token;
+    if (!token) {
+      return { redirect: { destination: '/', permanent: false } };
+    }
+    const base = process.env.AI_CORE_URL || 'http://localhost:8000';
+    const url = base.endsWith('/') ? `${base}v1/admin/plans` : `${base}/v1/admin/plans`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) {
+      return { redirect: { destination: '/', permanent: false } };
+    }
+    return { props: {} };
+  } catch {
+    return { redirect: { destination: '/', permanent: false } };
+  }
+}
 

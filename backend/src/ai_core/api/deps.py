@@ -8,7 +8,7 @@ from typing import Dict, Any
 from shared.security.jwt import jwt_service
 from shared.security.policy import Policy
 from ai_core.pipeline.audit_service import write_audit
-from shared.database.session import get_db
+from shared.database.session import get_db, set_tenant_context
 
 
 security = HTTPBearer(auto_error=False)
@@ -90,6 +90,11 @@ def require(action: str, resource: Dict[str, Any] | None = None):
             except Exception:
                 pass
             raise HTTPException(status_code=403, detail="Forbidden")
+        # Set DB tenant context for RLS enforcement
+        try:
+            set_tenant_context(str(claims.get("tenant_id") or ""))
+        except Exception:
+            pass
         return claims
 
     return _inner

@@ -2,6 +2,7 @@
 
 # Stage 1: Build stage
 ARG NODE_BUILD_IMAGE=node:20-alpine
+ARG NODE_RUN_IMAGE=node:20-alpine
 FROM ${NODE_BUILD_IMAGE} AS builder
 
 # Set working directory
@@ -20,15 +21,14 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production stage
-ARG NODE_RUN_IMAGE=node:20-alpine
 FROM ${NODE_RUN_IMAGE} AS runner
 
 # Set working directory
 WORKDIR /app
 
 # Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 nodejs \
+ && adduser --system --uid 1001 nextjs
 
 # Copy package files
 COPY package*.json ./
@@ -41,15 +41,17 @@ COPY --from=builder /app/.next ./.next
 # public is optional; copy only if exists
 COPY --from=builder /app/next.config.js ./
 
+# Install tini as root (before switching user)
+RUN apk add --no-cache tini
+
 # Set proper ownership
 RUN chown -R nextjs:nodejs /app
 
 # Switch to non-root user
 USER nextjs
 
-# Set production env and tini for signal handling
+# Set production env and tini entrypoint for signal handling
 ENV NODE_ENV=production
-RUN apk add --no-cache tini
 ENTRYPOINT ["/sbin/tini", "--"]
 
 # Expose port

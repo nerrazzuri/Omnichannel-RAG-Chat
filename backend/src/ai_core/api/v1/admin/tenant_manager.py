@@ -133,3 +133,29 @@ def status(tenant_id: str, request: Request, db: Session = Depends(get_db)):
     }
 
 
+# ---- Custom Domain (Whitelabel) ----
+class DomainBody(BaseModel):
+    domain: str
+
+
+@router.post("/{tenant_id}/custom-domain")
+def custom_domain_begin(tenant_id: str, body: DomainBody, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    tm = TenantManager(db)
+    return tm.begin_custom_domain(tenant_id, body.domain)
+
+
+@router.get("/{tenant_id}/custom-domain/status")
+def custom_domain_status(tenant_id: str, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    tm = TenantManager(db)
+    return tm.custom_domain_status(tenant_id)
+
+
+@router.delete("/{tenant_id}/custom-domain")
+def custom_domain_remove(tenant_id: str, request: Request, db: Session = Depends(get_db)):
+    _require_admin(request)
+    tm = TenantManager(db)
+    return tm.remove_custom_domain(tenant_id)
+
+

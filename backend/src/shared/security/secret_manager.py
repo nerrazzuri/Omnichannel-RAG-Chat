@@ -7,6 +7,7 @@ from typing import Optional
 from shared.security.vault_client import vault_client
 from shared.metrics.vault_metrics import vault_metrics
 from ai_core.pipeline.audit_service import write_vault_audit
+from typing import Dict
 
 
 class SecretManager:
@@ -40,6 +41,22 @@ class SecretManager:
         if not val:
             raise RuntimeError(f"Missing required secret: {name}")
         return val
+
+    def get_tenant_secret(self, tenant_id: str, name: str, default: Optional[str] = None) -> Optional[str]:
+        """Fetch a per-tenant secret (e.g., BYO provider keys) from Vault under tenants/{tenant_id}."""
+        try:
+            if not tenant_id:
+                return default
+            data: Dict[str, str] = vault_client.load_all(prefix=f"tenants/{tenant_id}")
+            if isinstance(data, dict) and name in data:
+                try:
+                    write_vault_audit(name, tenant_id)
+                except Exception:
+                    pass
+                return str(data.get(name)) if data.get(name) is not None else default
+        except Exception:
+            pass
+        return default
 
 
 secret_manager = SecretManager()

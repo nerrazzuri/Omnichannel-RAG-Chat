@@ -8,4 +8,6 @@
 - SAST/DAST reports: workflow artifacts
 - Rotation proofs: Vault rotation logs and timestamps
 
+- Vault human SSO evidence: /docs/evidence/vault_access_audit.log (weekly export) with date and hash; includes OIDC login entries (entity, policy, expiry)
+
 

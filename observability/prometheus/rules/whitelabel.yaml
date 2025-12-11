@@ -1,0 +1,23 @@
+groups:
+  - name: Whitelabel-Custom-Domain
+    rules:
+      - alert: CustomDomainCertExpiring
+        expr: (certmanager_certificate_expiration_timestamp_seconds - time()) < 14 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Custom domain certificate expiring soon"
+          description: "Certificate for {{ $labels.name }} expires in less than 14 days."
+
+      - alert: CustomDomainHighErrorRate
+        expr: sum by (host) (rate(nginx_ingress_controller_requests{status=~"5.."}[5m])) / sum by (host) (rate(nginx_ingress_controller_requests[5m])) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          service: gateway
+        annotations:
+          summary: "High 5xx error rate for custom domain"
+          description: "5xx > 2% for host={{ $labels.host }} over 10m."
+

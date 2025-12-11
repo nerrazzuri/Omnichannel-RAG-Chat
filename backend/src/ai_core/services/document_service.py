@@ -521,6 +521,7 @@ class DocumentService:
         content: str,
         knowledge_base_id: str,
         progress_job_id: str | None = None,
+        doc_meta: Dict[str, Any] | None = None,
     ) -> Tuple[str, int]:
         # Wrap entire ingest in a single transaction for atomicity
         trans = self.db.begin()
@@ -567,6 +568,24 @@ class DocumentService:
                     knowledge_base_id=kb_id,
                     status="PROCESSING",
                 )
+            # Merge provided document-level metadata (RBAC, etc.)
+            try:
+                if isinstance(doc_meta, dict) and doc_meta:
+                    base_meta = getattr(doc, "meta", {}) or {}
+                    # Normalize keys
+                    if "access" in doc_meta and isinstance(doc_meta["access"], str):
+                        base_meta["access"] = doc_meta["access"]
+                    if "owner_user_id" in doc_meta and doc_meta["owner_user_id"]:
+                        base_meta["owner_user_id"] = str(doc_meta["owner_user_id"])
+                    if "allowed_user_ids" in doc_meta and isinstance(
+                        doc_meta["allowed_user_ids"], list
+                    ):
+                        base_meta["allowed_user_ids"] = [
+                            str(x) for x in doc_meta["allowed_user_ids"]
+                        ]
+                    setattr(doc, "meta", base_meta)
+            except Exception:
+                pass
             self.db.add(doc)
             # Flush to assign PKs without committing the transaction
             self.db.flush()
@@ -644,20 +663,37 @@ class DocumentService:
                         pass
                 # SQLAlchemy default UUID is assigned on instantiation; id is available before commit
                 try:
-                    qdrant_payload.append(
-                        {
-                            "id": str(chunk_id),
-                            "embedding": emb,
-                            "document_id": str(doc.id),
-                            "document_title": doc.title,
-                            "content": chunk_text_val,
-                            "chunk_index": idx,
-                            "chapter_num": merged_meta.get("chapter_num"),
-                            "chapter_title": merged_meta.get("chapter_title"),
-                            "page": merged_meta.get("page"),
-                            "metadata": merged_meta or {},
-                        }
-                    )
+                    # Extract ACL fields from document.meta
+                    acl_access = None
+                    owner_user_id = None
+                    allowed_user_ids = None
+                    try:
+                        dmeta = getattr(doc, "meta", {}) or {}
+                        acl_access = dmeta.get("access")
+                        owner_user_id = dmeta.get("owner_user_id")
+                        allowed_user_ids = dmeta.get("allowed_user_ids")
+                    except Exception:
+                        pass
+                    payload = {
+                        "id": str(chunk_id),
+                        "embedding": emb,
+                        "document_id": str(doc.id),
+                        "document_title": doc.title,
+                        "content": chunk_text_val,
+                        "chunk_index": idx,
+                        "chapter_num": merged_meta.get("chapter_num"),
+                        "chapter_title": merged_meta.get("chapter_title"),
+                        "page": merged_meta.get("page"),
+                        "metadata": merged_meta or {},
+                    }
+                    # Attach ACL for vector-time filtering
+                    if isinstance(acl_access, str):
+                        payload["visibility"] = acl_access
+                    if owner_user_id:
+                        payload["owner_user_id"] = str(owner_user_id)
+                    if isinstance(allowed_user_ids, list):
+                        payload["allowed_user_ids"] = [str(x) for x in allowed_user_ids]
+                    qdrant_payload.append(payload)
                 except Exception:
                     pass
             doc.status = "INDEXED"

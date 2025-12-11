@@ -21,6 +21,7 @@ class EmbeddingService:
     def __init__(self) -> None:
         api_key = secret_manager.get("OPENAI_API_KEY")
         self.client = OpenAI(api_key=api_key) if api_key else None
+        self._tenant_clients: dict[str, OpenAI] = {}
         self.model = getattr(
             retrieval,
             "embedding_model",
@@ -49,6 +50,20 @@ class EmbeddingService:
         if not self.client:
             self._logger.error("Embedding client unavailable; skipping embed")
             return None
+        # Prefer per-tenant BYO client if configured
+        try:
+            if tenant_id:
+                tkey = secret_manager.get_tenant_secret(tenant_id, "OPENAI_API_KEY")
+                if tkey:
+                    if tenant_id not in self._tenant_clients:
+                        self._tenant_clients[tenant_id] = OpenAI(api_key=tkey)
+                    self_client = self._tenant_clients[tenant_id]
+                else:
+                    self_client = self.client
+            else:
+                self_client = self.client
+        except Exception:
+            self_client = self.client
         k = self._cache_key(query)
         cached = redis_cache.get_tenant_key(tenant_id, k)
         if isinstance(cached, list):
@@ -78,7 +93,7 @@ class EmbeddingService:
 
         @retry_with_backoff("openai.embed")
         def _do_embed() -> Optional[List[float]]:
-            resp = self.client.embeddings.create(model=self.model, input=[query])
+            resp = self_client.embeddings.create(model=self.model, input=[query])
             vec = resp.data[0].embedding if resp and resp.data else None
             # Token/cost accounting (OpenAI embeds may not return usage; estimate)
             try:
@@ -176,7 +191,7 @@ class EmbeddingService:
 
         @retry_with_backoff("openai.embed.batch")
         def _do_batch() -> List[List[float]]:
-            resp = self.client.embeddings.create(model=self.model, input=batch_inputs)
+            resp = self_client.embeddings.create(model=self.model, input=batch_inputs)
             out = []
             if resp and getattr(resp, "data", None):
                 for item in resp.data:

@@ -21,11 +21,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const bodyBuffer = Buffer.concat(chunks);
 
     const ct = req.headers['content-type'] || 'application/octet-stream';
-    const incomingAuth = (req.headers['authorization'] as string) || (req.headers['x-admin-token'] as string);
-    const qToken = (req.query['token'] as string) || (req.query['auth'] as string);
-    const qBearer = qToken ? (qToken.startsWith('Bearer ') ? qToken : `Bearer ${qToken}`) : undefined;
+    // Derive auth from cookies (HttpOnly) or use static admin bearer if configured
+    const cookieBearer = req.cookies?.auth_token ? `Bearer ${req.cookies.auth_token}` : undefined;
     const staticAuth = process.env.ADMIN_UPLOAD_BEARER ? `Bearer ${process.env.ADMIN_UPLOAD_BEARER}` : undefined;
-    const authHeader = incomingAuth || qBearer || staticAuth;
+    const authHeader = cookieBearer || staticAuth;
     const upstream = await fetch((process.env.AI_CORE_URL || 'http://localhost:8000') + '/v1/tenant/upload_file', {
       method: 'POST',
       headers: {

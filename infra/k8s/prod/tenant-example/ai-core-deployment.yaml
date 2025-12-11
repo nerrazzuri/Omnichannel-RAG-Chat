@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-core
+  namespace: tenant-example
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-core
+  template:
+    metadata:
+      labels:
+        app: ai-core
+        app.kubernetes.io/name: ai-core
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: omnichannel
+    spec:
+      automountServiceAccountToken: false
+      serviceAccountName: ai-core
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        fsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: ai-core
+          image: ghcr.io/nerrazzuri/omni-ai-core:staging
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: DATABASE_URL
+              value: postgresql://user:password@postgres:5432/omni
+            - name: REDIS_URL
+              value: redis://redis:6379/0
+            - name: QDRANT_URL
+              value: http://qdrant:6333
+          readinessProbe:
+            httpGet:
+              path: /v1/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          envFrom:
+            - secretRef:
+                name: ai-core-env
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-core
+  namespace: tenant-example
+spec:
+  selector:
+    app: ai-core
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+

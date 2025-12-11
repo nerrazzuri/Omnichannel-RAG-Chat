@@ -3,6 +3,7 @@
 
 # Stage 1: Build stage
 ARG PY_BASE_IMAGE=python:3.11-slim-bookworm
+ARG PY_RUN_IMAGE=python:3.11-slim-bookworm
 FROM ${PY_BASE_IMAGE} AS builder
 
 # Set working directory
@@ -68,7 +69,6 @@ else:
 PY
 
 # Stage 2: Production stage
-ARG PY_RUN_IMAGE=python:3.11-slim-bookworm
 FROM ${PY_RUN_IMAGE}
 
 # Create non-root user (with home directory)

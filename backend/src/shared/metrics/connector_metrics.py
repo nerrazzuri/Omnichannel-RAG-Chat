@@ -27,14 +27,6 @@ def inc_sync(plan_type: str, connector: str, tenant_id: str, status: str) -> Non
     except Exception:
         pass
 
-from __future__ import annotations
-
-try:
-    from prometheus_client import Counter, Histogram  # type: ignore
-except Exception:  # pragma: no cover
-    Counter = None  # type: ignore
-    Histogram = None  # type: ignore
-
 from shared.config.tuning import telemetry
 
 

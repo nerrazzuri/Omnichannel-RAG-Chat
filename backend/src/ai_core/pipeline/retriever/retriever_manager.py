@@ -22,6 +22,9 @@ class RetrieverManager:
         db: Any = None,
         preselected_contexts: Optional[List[str]] = None,
         expansion_terms: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        role: Optional[str] = None,
+        allowed_document_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         bm25_texts: List[str] = preselected_contexts or []
         dense_hits: List[Dict[str, Any]] = []
@@ -57,8 +60,24 @@ class RetrieverManager:
             emb = self._emb.embed_query(query, tenant_id)
             if emb:
                 self._cache.set(tenant_id, "emb", query, emb, ttl=1800)
-        dense_hits = self.dense.search_rich(query, tenant_id, top_k=8, emb=emb)
-        field_value_hits = self.fvals.search_rich(query, tenant_id, top_k=8, emb=emb)
+        dense_hits = self.dense.search_rich(
+            query,
+            tenant_id,
+            top_k=8,
+            emb=emb,
+            user_id=user_id,
+            role=role,
+            allowed_document_ids=allowed_document_ids,
+        )
+        field_value_hits = self.fvals.search_rich(
+            query,
+            tenant_id,
+            top_k=8,
+            emb=emb,
+            user_id=user_id,
+            role=role,
+            allowed_document_ids=allowed_document_ids,
+        )
         # Cache vector hits to reduce Qdrant load for repeated queries
         if dense_hits:
             self._cache.set(tenant_id, "dense_hits", query, dense_hits, ttl=300)

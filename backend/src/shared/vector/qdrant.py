@@ -111,6 +111,21 @@ class QdrantService:
                     field_schema="keyword",
                 )
                 logger.info("Created tenant_id payload index")
+                # RBAC payload indices
+                for fname, ftype in (
+                    ("visibility", "keyword"),
+                    ("owner_user_id", "keyword"),
+                    ("allowed_user_ids", "keyword"),
+                ):
+                    try:
+                        self._with_retries(
+                            self.client.create_payload_index,
+                            collection_name=self.collection_name,
+                            field_name=fname,
+                            field_schema=ftype,
+                        )
+                    except Exception:
+                        pass
                 # Create payload indices for chapter metadata to speed chapter queries
                 try:
                     self._with_retries(
@@ -199,6 +214,10 @@ class QdrantService:
                     ("tenant_id", "keyword"),
                     ("document_id", "keyword"),
                     ("field_name", "keyword"),
+                    # RBAC fields
+                    ("visibility", "keyword"),
+                    ("owner_user_id", "keyword"),
+                    ("allowed_user_ids", "keyword"),
                 ):
                     try:
                         self._with_retries(
@@ -248,6 +267,10 @@ class QdrantService:
                         "page": chunk.get("page"),
                         # retain any nested metadata
                         "metadata": chunk.get("metadata", {}),
+                        # RBAC fields (optional, for filtering)
+                        "visibility": chunk.get("visibility"),
+                        "owner_user_id": chunk.get("owner_user_id"),
+                        "allowed_user_ids": chunk.get("allowed_user_ids"),
                     },
                 )
                 points.append(point)
@@ -444,14 +467,43 @@ class QdrantService:
         query_embedding: List[float],
         tenant_id: str,
         top_k: int = 8,
+        user_id: Optional[str] = None,
+        role: Optional[str] = None,
+        allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search field_values collection for a tenant."""
         try:
-            filter_condition = Filter(
-                must=[
-                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
+            must = [FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+            if (role or "").upper() != "ADMIN":
+                should = [
+                    FieldCondition(key="visibility", match=MatchValue(value="public")),
+                    FieldCondition(key="visibility", match=MatchValue(value="tenant")),
                 ]
-            )
+                if user_id:
+                    should.append(
+                        FieldCondition(
+                            key="owner_user_id", match=MatchValue(value=user_id)
+                        )
+                    )
+                    should.append(
+                        FieldCondition(
+                            key="allowed_user_ids", match=MatchValue(value=user_id)
+                        )
+                    )
+                # Optional narrowing by document IDs
+                if isinstance(allowed_document_ids, list) and allowed_document_ids:
+                    for did in allowed_document_ids[:1000]:
+                        try:
+                            should.append(
+                                FieldCondition(
+                                    key="document_id", match=MatchValue(value=str(did))
+                                )
+                            )
+                        except Exception:
+                            continue
+                filter_condition = Filter(must=must, should=should)
+            else:
+                filter_condition = Filter(must=must)
             res = self._with_retries(
                 self.client.search,
                 collection_name=self.field_values_collection,
@@ -502,15 +554,43 @@ class QdrantService:
         tenant_id: str,
         top_k: int = 5,
         threshold: float = 0.7,
+        user_id: Optional[str] = None,
+        role: Optional[str] = None,
+        allowed_document_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search for similar knowledge chunks within a tenant."""
         try:
-            # Create filter for tenant isolation
-            filter_condition = Filter(
-                must=[
-                    FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
+            must = [FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+            if (role or "").upper() != "ADMIN":
+                should = [
+                    FieldCondition(key="visibility", match=MatchValue(value="public")),
+                    FieldCondition(key="visibility", match=MatchValue(value="tenant")),
                 ]
-            )
+                if user_id:
+                    should.append(
+                        FieldCondition(
+                            key="owner_user_id", match=MatchValue(value=user_id)
+                        )
+                    )
+                    should.append(
+                        FieldCondition(
+                            key="allowed_user_ids", match=MatchValue(value=user_id)
+                        )
+                    )
+                # Optional narrowing by document IDs
+                if isinstance(allowed_document_ids, list) and allowed_document_ids:
+                    for did in allowed_document_ids[:1000]:
+                        try:
+                            should.append(
+                                FieldCondition(
+                                    key="document_id", match=MatchValue(value=str(did))
+                                )
+                            )
+                        except Exception:
+                            continue
+                filter_condition = Filter(must=must, should=should)
+            else:
+                filter_condition = Filter(must=must)
 
             # Search with filter
             collection_name = self.collection_name

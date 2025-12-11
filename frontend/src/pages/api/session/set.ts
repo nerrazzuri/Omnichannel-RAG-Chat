@@ -11,10 +11,14 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
       res.status(400).json({ error: 'token and tenant_id required' });
       return;
     }
-    const isProd = process.env.NODE_ENV === 'production';
+    // In containers NODE_ENV is 'production', but in local HTTP we must not set Secure or the browser will drop cookies.
+    const forwardedProto = (req.headers['x-forwarded-proto'] as string) || '';
+    const isHttps = forwardedProto.toLowerCase() === 'https';
+    const forceSecure = (process.env.COOKIE_SECURE || '').toLowerCase() === '1';
+    const isSecure = isHttps || forceSecure;
     res.setHeader('Set-Cookie', [
-      `auth_token=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax${isProd ? '; Secure' : ''}`,
-      `tenant_id=${encodeURIComponent(tenant_id)}; HttpOnly; Path=/; SameSite=Lax${isProd ? '; Secure' : ''}`,
+      `auth_token=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax${isSecure ? '; Secure' : ''}`,
+      `tenant_id=${encodeURIComponent(tenant_id)}; HttpOnly; Path=/; SameSite=Lax${isSecure ? '; Secure' : ''}`,
     ]);
     res.status(200).json({ ok: true });
   } catch (e: any) {

@@ -5,9 +5,7 @@ pid_file = "/tmp/vault-agent.pid"
 auto_auth {
   method "token" {
     mount_path = "auth/token"
-    config = {
-      token = "${VAULT_TOKEN}"
-    }
+    # Token is provided via VAULT_TOKEN environment variable
   }
 }
 

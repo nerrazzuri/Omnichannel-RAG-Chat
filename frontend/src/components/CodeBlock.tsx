@@ -20,7 +20,7 @@ export default function CodeBlock(props: Props) {
   };
   return (
     <div className="relative group">
-      <pre className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${langClass}`} {...rest}>
+      <pre className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${langClass}`}>
         <code className={langClass}>{text}</code>
       </pre>
       <button

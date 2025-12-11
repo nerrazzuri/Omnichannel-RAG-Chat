@@ -7,6 +7,7 @@ import { planRateLimit } from './rate/planLimiter';
 import { planGuard } from './middleware/planGuard';
 import { planHeader } from './middleware/planHeader';
 import { startWebhookWorker } from './queue/retryQueue';
+import { hostTenant } from './middleware/hostTenant';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -33,6 +34,7 @@ async function bootstrap() {
   app.use(planRateLimit());
   app.use(planGuard());
   app.use(planHeader());
+  app.use(hostTenant());
 
   // Start Redis-backed webhook worker
   startWebhookWorker();

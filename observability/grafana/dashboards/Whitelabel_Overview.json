@@ -1,0 +1,27 @@
+{
+  "title": "Whitelabel Overview",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Custom Domain Requests",
+      "targets": [
+        {"expr": "sum by (host) (rate(custom_domain_requests_total[5m]))"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Custom Domain Errors",
+      "targets": [
+        {"expr": "sum by (host) (rate(custom_domain_errors_total[5m]))"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingress 5xx Rate (by host)",
+      "targets": [
+        {"expr": "sum by (host) (rate(nginx_ingress_controller_requests{status=~\"5..\"}[5m])) / sum by (host) (rate(nginx_ingress_controller_requests[5m]))"}
+      ]
+    }
+  ]
+}
+

@@ -8,6 +8,13 @@ from typing import Dict, Any
 from shared.database.session import SessionLocal
 import os
 from shared.database.models import Tenant, Approval, RetentionPolicy, CostSummary
+from shared.database.session import set_tenant_context
+from shared.security.vault_client import vault_client
+from shared.vector.qdrant import QdrantService
+from shared.queue.retry_queue import retry_queue
+import shutil
+import os as _os
+import secrets as _secrets
 from sqlalchemy.sql import func as _func
 from sqlalchemy import text as _sql
 
@@ -93,6 +100,11 @@ def create_tenant(body: TenantCreateBody, request: Request, db: Session = Depend
 @router.get("/summary")
 def tenant_summary(tenant_id: str, request: Request, db: Session = Depends(get_db)):
     _require_admin(request)
+    # Impersonation-safe read: set DB RLS tenant context
+    try:
+        set_tenant_context(tenant_id)
+    except Exception:
+        pass
     t = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="tenant not found")
@@ -195,4 +207,75 @@ def tenant_summary(tenant_id: str, request: Request, db: Session = Depends(get_d
         "cost": cost_snapshot,
     }
 
+
+class TenantSecretsBody(BaseModel):
+    # Write-only fields (masked on read): accept known keys
+    OPENAI_API_KEY: str | None = None
+    FILE_SIGNING_SECRET: str | None = None
+
+
+@router.post("/{tenant_id}/secrets")
+def update_tenant_secrets(tenant_id: str, body: TenantSecretsBody, request: Request):
+    _require_admin(request)
+    # Only allow in server environments where Vault is enabled
+    if not vault_client.enabled:
+        raise HTTPException(status_code=400, detail="Vault not enabled")
+    payload: Dict[str, str] = {}
+    for k in ("OPENAI_API_KEY", "FILE_SIGNING_SECRET"):
+        v = getattr(body, k, None)
+        if v:
+            payload[k] = str(v)
+    if not payload:
+        raise HTTPException(status_code=400, detail="no secrets provided")
+    ok = vault_client.put_all(prefix=f"tenants/{tenant_id}", data=payload)
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to update secrets")
+    # Never return secret values
+    return {"updated": list(payload.keys()), "tenant_id": tenant_id, "status": "ok"}
+
+
+@router.post("/{tenant_id}/ops/purge-vectors")
+def purge_vectors(tenant_id: str, request: Request):
+    _require_admin(request)
+    try:
+        ok = QdrantService().delete_tenant_chunks(tenant_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"qdrant purge failed: {e}")
+    return {"tenant_id": tenant_id, "purged_vectors": bool(ok)}
+
+
+@router.post("/{tenant_id}/ops/purge-storage")
+def purge_storage(tenant_id: str, request: Request):
+    _require_admin(request)
+    base = _os.getenv("DOCUMENT_STORAGE_PATH", _os.path.join(_os.getcwd(), "storage"))
+    tenant_root = _os.path.join(base, f"tenant_{tenant_id}")
+    try:
+        if _os.path.isdir(tenant_root):
+            shutil.rmtree(tenant_root, ignore_errors=True)
+            return {"tenant_id": tenant_id, "purged_storage": True}
+        return {"tenant_id": tenant_id, "purged_storage": False, "detail": "not found"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"storage purge failed: {e}")
+
+
+@router.post("/{tenant_id}/ops/reindex")
+def reindex_tenant(tenant_id: str, request: Request):
+    _require_admin(request)
+    try:
+        retry_queue.enqueue("tenant_reindex", tenant_id, payload={"requested_by": "admin"})
+        return {"tenant_id": tenant_id, "status": "scheduled"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"enqueue failed: {e}")
+
+
+@router.post("/{tenant_id}/ops/rotate-signing-secret")
+def rotate_signing_secret(tenant_id: str, request: Request):
+    _require_admin(request)
+    if not vault_client.enabled:
+        raise HTTPException(status_code=400, detail="Vault not enabled")
+    new_secret = _secrets.token_hex(32)
+    ok = vault_client.put_all(prefix=f"tenants/{tenant_id}", data={"FILE_SIGNING_SECRET": new_secret})
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to rotate signing secret")
+    return {"tenant_id": tenant_id, "rotated": "FILE_SIGNING_SECRET"}
 
