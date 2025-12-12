@@ -2,7 +2,7 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CodeBlock from './CodeBlock';
-import { beautifyMarkdown } from '../lib/beautify';
+import { beautifyMarkdown } from '../lib/beautify/index';
 
 export default function MessageRenderer({ content }: { content: string }) {
   const enabled = process.env.NEXT_PUBLIC_RESPONSE_BEAUTIFY === 'true';

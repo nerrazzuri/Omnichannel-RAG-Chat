@@ -162,3 +162,10 @@ JWT_SECRET.json
 FILE_SIGNING_SECRET.json
 ADMIN_UPLOAD_BEARER.json
 vault-ai-core.json
+backend/.env
+ai_core.json
+OPENAI_API_KEY.json
+JWT_SECRET.json
+FILE_SIGNING_SECRET.json
+ADMIN_UPLOAD_BEARER.json
+vault-ai-core.json
