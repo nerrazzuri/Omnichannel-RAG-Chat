@@ -20,6 +20,7 @@ export default function CodeBlock(props: Props) {
   };
   return (
     <div className="relative group">
+      <div className="absolute -top-2 left-3 bg-white text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600">Example</div>
       <pre className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${langClass}`}>
         <code className={langClass}>{text}</code>
       </pre>

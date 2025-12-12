@@ -1,99 +1,70 @@
 import React from 'react';
 
-const HomePage: React.FC = () => {
+export default function HomePage() {
   return (
-    <div style={{
-      fontFamily: 'Arial, sans-serif',
-      maxWidth: '800px',
-      margin: '0 auto',
-      padding: '20px',
-      backgroundColor: '#f5f5f5',
-      minHeight: '100vh'
-    }}>
-      <header style={{
-        backgroundColor: '#007acc',
-        color: 'white',
-        padding: '20px',
-        borderRadius: '8px',
-        marginBottom: '20px'
-      }}>
-        <h1>Omnichannel Enterprise RAG Chatbot Platform</h1>
-        <p>Frontend Application - Development Mode</p>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+      <header className="relative overflow-hidden bg-white">
+        <div className="max-w-7xl mx-auto px-6 py-16 sm:py-20 lg:py-24">
+          <div className="mx-auto max-w-3xl text-center">
+            <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-5xl">
+              Turn your documents into a trusted, enterprise-grade chatbot
+            </h1>
+            <p className="mt-4 text-lg text-gray-600">
+              Omnichannel RAG helps your teams ask better questions, find vetted answers, and act with confidence—powered by your knowledge base.
+            </p>
+            <div className="mt-8 flex items-center justify-center gap-3">
+              <a href="/chat" className="inline-flex items-center rounded-md bg-blue-600 px-5 py-3 text-white font-medium hover:bg-blue-700 shadow">
+                Ask Your Knowledge Base
+              </a>
+              <a href="/admin/super" className="inline-flex items-center rounded-md border border-gray-300 px-5 py-3 text-gray-900 hover:bg-gray-50">
+                Admin Console
+              </a>
+            </div>
+          </div>
+        </div>
       </header>
 
-      <main style={{
-        backgroundColor: 'white',
-        padding: '20px',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-      }}>
-        <h2>🚀 Services Status</h2>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginTop: '20px' }}>
-          <div style={{ padding: '15px', border: '1px solid #ddd', borderRadius: '5px' }}>
-            <h3>AI Core Service</h3>
-            <p>Status: <span style={{ color: '#28a745' }}>✅ Running</span></p>
-            <p>Port: 8000</p>
-            <p>Endpoint: /v1/health</p>
+      <main className="max-w-7xl mx-auto px-6 py-10">
+        <div className="grid gap-6 md:grid-cols-3">
+          <div className="rounded-lg border border-gray-200 bg-white p-6">
+            <div className="text-sm font-medium text-blue-700 mb-2">Retrieve</div>
+            <p className="text-gray-700 text-sm">
+              Connect your docs, emails, and knowledge bases. Our retrieval pipeline keeps context fresh and relevant.
+            </p>
           </div>
-
-          <div style={{ padding: '15px', border: '1px solid #ddd', borderRadius: '5px' }}>
-            <h3>Gateway Service</h3>
-            <p>Status: <span style={{ color: '#28a745' }}>✅ Running</span></p>
-            <p>Port: 3001</p>
-            <p>Endpoint: /api/health</p>
+          <div className="rounded-lg border border-gray-200 bg-white p-6">
+            <div className="text-sm font-medium text-emerald-700 mb-2">Reason</div>
+            <p className="text-gray-700 text-sm">
+              Enable grounded answers with built-in citations and optional reasoning trace to drive trust and transparency.
+            </p>
           </div>
-
-          <div style={{ padding: '15px', border: '1px solid #ddd', borderRadius: '5px' }}>
-            <h3>Frontend Service</h3>
-            <p>Status: <span style={{ color: '#28a745' }}>✅ Running</span></p>
-            <p>Port: 3000</p>
-            <p>Framework: Next.js</p>
+          <div className="rounded-lg border border-gray-200 bg-white p-6">
+            <div className="text-sm font-medium text-purple-700 mb-2">Govern</div>
+            <p className="text-gray-700 text-sm">
+              Enforce tenant isolation, role-based access, and usage controls out of the box. Built for enterprise.
+            </p>
           </div>
         </div>
 
-        <div style={{ marginTop: '30px', padding: '20px', backgroundColor: '#e9ecef', borderRadius: '5px' }}>
-          <h3>📋 Implementation Status</h3>
-          <p><strong>Phase 1 (Setup):</strong> ✅ Complete - Project structure, dependencies, Docker builds</p>
-          <p><strong>Phase 2 (Foundational):</strong> ✅ Complete - Database, authentication, caching, logging</p>
-          <p><strong>Next Steps:</strong> Begin User Story 1 implementation (Customer Inquiry Resolution)</p>
-        </div>
-
-        <div style={{ marginTop: '20px' }}>
-          <h3>🔧 Development Commands</h3>
-          <pre style={{
-            backgroundColor: '#f8f9fa',
-            padding: '15px',
-            borderRadius: '5px',
-            overflow: 'auto'
-          }}>
-{`# Start all services
-docker-compose up
-
-# Start individual services
-cd backend && python src/ai_core/main.py
-cd gateway && npm run start:dev
-cd frontend && npm run dev
-
-# Run tests
-cd backend && python -m pytest tests/
-cd gateway && npm test
-`}
-          </pre>
+        <div className="mt-12 grid gap-6 sm:grid-cols-2">
+          <a href="/chat" className="block rounded-lg border border-gray-200 p-6 hover:shadow-sm bg-white">
+            <div className="font-semibold text-gray-900 mb-1">Try the Chat</div>
+            <div className="text-sm text-gray-600">
+              Ask questions about your documents, explore follow-ups, and see relevant sources.
+            </div>
+          </a>
+          <a href="/admin/super" className="block rounded-lg border border-gray-200 p-6 hover:shadow-sm bg-white">
+            <div className="font-semibold text-gray-900 mb-1">Configure &amp; Monitor</div>
+            <div className="text-sm text-gray-600">
+              Upload content, manage tenants, and review usage—all in one place.
+            </div>
+          </a>
         </div>
       </main>
 
-      <footer style={{
-        marginTop: '20px',
-        textAlign: 'center',
-        color: '#6c757d',
-        padding: '10px'
-      }}>
-        <p>Omnichannel Enterprise RAG Chatbot Platform - Frontend Dashboard</p>
-        <p>Implementation Status: ✅ Foundation Complete | 🚧 User Stories In Progress</p>
+      <footer className="border-t border-gray-200 mt-12 py-8 text-center text-sm text-gray-500">
+        © {new Date().getFullYear()} Omnichannel RAG. All rights reserved.
       </footer>
     </div>
   );
-};
-
-export default HomePage;
+}

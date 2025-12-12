@@ -8,23 +8,23 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [planType, setPlanType] = useState<string>('');
-  const [usage, setUsage] = useState<{ tokens_used: number; tokens_quota: number } | null>(null);
+  const [usage, setUsage] = useState<{ tokens_used: number; tokens_quota: number; docs_count?: number } | null>(null);
+  const [tenantId, setTenantId] = useState<string>('');
 
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
 
-  // Seed Omni greeting on initial load
+  // Read tenant id from cookies for header context
   useEffect(() => {
-    if (messages.length === 0) {
-      setMessages([{
-        id: 'init-1',
-        role: 'assistant',
-        content: "Hello! I'm Omni. How can I help you today?",
-        timestamp: Date.now()
-      }]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    try {
+      if (typeof document !== 'undefined') {
+        const m = document.cookie.match(/(?:^|; )\\s*tenant_id=([^;]+)/);
+        if (m) {
+          setTenantId(decodeURIComponent(m[1]));
+        }
+      }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -32,13 +32,13 @@ export default function ChatPage() {
       try {
         const r = await fetch('/api/tenant/plan', { headers: {} });
         if (r.ok) {
-          const j = await r.json();
-          setPlanType(j?.plan_type || '');
+      const j = await r.json();
+      setPlanType(j?.plan_type || '');
         }
         const u = await fetch('/api/tenant/usage');
         if (u.ok) {
-          const ju = await u.json();
-          setUsage({ tokens_used: ju?.tokens_used || 0, tokens_quota: ju?.tokens_quota || 0 });
+      const ju = await u.json();
+      setUsage({ tokens_used: ju?.[ 'tokens_used'] || 0, tokens_quota: ju?.['tokens_quota'] || 0, docs_count: ju?.['docs_count'] });
         }
       } catch { }
     })();
@@ -84,6 +84,15 @@ export default function ChatPage() {
     setInput('');
     setLoading(true);
 
+    // Soft "working..." message if backend takes >4s
+    const workingId = `working-${Date.now()}`;
+    const workingTimer = setTimeout(() => {
+      setMessages((m) => {
+        if (m.some(x => x.id === workingId)) return m;
+        return [...m, { id: workingId, role: 'assistant', content: 'Working…', timestamp: Date.now() }];
+      });
+    }, 4000);
+
     try {
       const resp = await postQuery({ channel: 'web', message: userMsg.content });
       const content = resp.response || resp.final_response || '';
@@ -110,16 +119,17 @@ export default function ChatPage() {
         citations: resp.citations?.map((c: any) => c.source_url || c.title || c.source)
       };
 
-      setMessages((m) => [...m, assistantMsg]);
+      setMessages((m) => [...m.filter(x => x.id !== workingId), assistantMsg]);
     } catch (e) {
       console.error(e);
-      setMessages((m) => [...m, {
+      setMessages((m) => [...m.filter(x => x.id !== workingId), {
         id: Date.now().toString(),
         role: 'assistant',
         content: "I'm sorry, I encountered an error processing your request.",
         timestamp: Date.now()
       }]);
     } finally {
+      clearTimeout(workingTimer);
       setLoading(false);
     }
   };
@@ -153,9 +163,16 @@ export default function ChatPage() {
           <section className="w-full flex flex-col">
             <div ref={scrollRef} className="flex-1 overflow-y-auto pt-4 pb-28 space-y-6">
               {messages.length === 0 && (
-                <div className="mx-auto mt-16 max-w-2xl text-center text-gray-500">
+                <div className="mx-auto mt-16 max-w-2xl text-center text-gray-700">
                   <h3 className="text-2xl font-semibold text-gray-900 mb-2">Welcome</h3>
-                  <p className="text-sm">Ask about documents, policies, or upload knowledge in the Admin panel.</p>
+                  <p className="text-sm text-gray-600">Ask about your uploaded knowledge or try one of these:</p>
+                  <div className="mt-4 flex flex-wrap gap-2 justify-center">
+                    {['Summarize last quarter’s performance','List the top customer questions','What changed in the latest release notes?','Draft a response to a refund request'].map((s) => (
+                      <button key={s} onClick={() => setInput(s)} className="text-xs rounded-full border border-gray-300 px-3 py-1 hover:bg-gray-50">
+                        {s}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {messages.map((m) => (
@@ -191,12 +208,12 @@ export default function ChatPage() {
                     className="flex-1 resize-none rounded-xl border-gray-300 focus:border-blue-500 focus:ring-blue-500 text-sm px-4 py-3 shadow-sm"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Message Omnichannel RAG..."
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                    placeholder="Ask about your knowledge…"
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (input.trim()) send(); } }}
                   />
                   <button
                     onClick={send}
-                    disabled={loading}
+                    disabled={loading || !input.trim()}
                     className="inline-flex items-center justify-center rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-3 shadow disabled:opacity-50"
                   >
                     {loading ? (
@@ -213,6 +230,7 @@ export default function ChatPage() {
                   </button>
                 </div>
                 <div className="mt-2 text-[11px] text-gray-500">Shift+Enter for new line</div>
+                <div className="mt-1 text-[11px] text-gray-500">Answers are grounded in your uploaded knowledge. Sources are listed when available.</div>
               </div>
             </div>
 
