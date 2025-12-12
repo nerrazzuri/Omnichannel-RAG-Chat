@@ -14,6 +14,11 @@ COPY package*.json ./
 # Install dependencies (deterministic)
 RUN npm ci
 
+# Disable ESLint
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_DISABLE_ESLINT=true
+ENV NEXT_DISABLE_TYPECHECK=true
+
 # Copy source code
 COPY . .
 

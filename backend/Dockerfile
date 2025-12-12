@@ -9,10 +9,13 @@ FROM ${PY_BASE_IMAGE} AS builder
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies required for scientific Python (numpy, sklearn, lightgbm)
 RUN apt-get update -o Acquire::Retries=5 && \
     apt-get install -y --no-install-recommends \
-    gcc \
+    build-essential \
+    gfortran \
+    libatlas-base-dev \
+    liblapack-dev \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
