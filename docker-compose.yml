@@ -21,8 +21,10 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./reverse-proxy/certs:/etc/nginx/certs:ro
     networks:
       - frontend_net
       - backend_net
@@ -116,7 +118,7 @@ services:
       - backend_net
       - frontend_net
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/healthz"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3001/healthz"]
       interval: 15s
       timeout: 2s
       retries: 5
