@@ -56,5 +56,8 @@ ENTRYPOINT ["/sbin/tini", "--"]
 # Expose port
 EXPOSE 3001
 
+HEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=5 \
+  CMD wget -q -T 2 -O - http://127.0.0.1:3001/healthz || exit 1
+
 # Start the application
 CMD ["npm", "run", "start:prod"]

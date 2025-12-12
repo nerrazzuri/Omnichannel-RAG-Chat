@@ -169,3 +169,7 @@ JWT_SECRET.json
 FILE_SIGNING_SECRET.json
 ADMIN_UPLOAD_BEARER.json
 vault-ai-core.json
+
+# Do not ignore frontend source library folder (overrides generic 'lib/' rule above)
+!frontend/src/lib/
+!frontend/src/lib/**

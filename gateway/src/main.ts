@@ -1,5 +1,4 @@
 import './utils/secretLoader';
-import * as http from 'http';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
@@ -12,23 +11,24 @@ import { hostTenant } from './middleware/hostTenant';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
-  const server = app.getHttpServer() as http.Server;
 
-  // 🔴 RAW LIVENESS PROBE — BYPASSES NEST COMPLETELY
-  server.on('request', (req, res) => {
+  // 🔴 FAST LIVENESS — BYPASS ALL BUSINESS MIDDLEWARE
+  app.use((req, res, next) => {
     if (req.url === '/healthz') {
-      res.statusCode = 200;
-      res.end('OK');
+      res.status(200).send('OK');
+      return;
     }
+    next();
   });
 
   // Enable global validation pipes
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-  }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   // Enable CORS
   app.enableCors({
@@ -37,25 +37,24 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Trust reverse proxy for rate limit and IP extraction
+  // Trust reverse proxy for correct client IP
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
-  // Basic rate limiting (per-IP); for distributed setups, back with Redis store
-  const limiter = rateLimit({ windowMs: 60_000, max: 0 }); // disabled; prefer plan-based limiter below
+  // Plan-aware middleware and headers
   app.use(planRateLimit());
   app.use(planGuard());
   app.use(planHeader());
   app.use(hostTenant());
 
-  // Start Redis-backed webhook worker
+  // Start background worker
   startWebhookWorker();
 
-  // Global prefix for API routes
+  // Global API prefix
   app.setGlobalPrefix('api');
 
   const port = process.env.PORT || 3001;
   await app.listen(port);
-
+  // eslint-disable-next-line no-console
   console.log(`Gateway service is running on port ${port}`);
 }
 
