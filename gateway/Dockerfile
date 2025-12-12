@@ -44,7 +44,7 @@ COPY --from=builder /app/dist ./dist
 RUN mkdir -p logs && chown -R nestjs:nodejs /app
 
 # Install tini as root (before switching user)
-RUN apk add --no-cache tini
+RUN apk add --no-cache tini wget
 
 # Switch to non-root user
 USER nestjs
@@ -55,10 +55,6 @@ ENTRYPOINT ["/sbin/tini", "--"]
 
 # Expose port
 EXPOSE 3001
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/api/health || exit 1
 
 # Start the application
 CMD ["npm", "run", "start:prod"]

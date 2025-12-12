@@ -1,17 +1,46 @@
- 
+version: "3.9"
+
+networks:
+  backend_net:
+  frontend_net:
+  data_net:
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_storage:
 
 services:
-  # Database services
+
+  # =========================
+  # Reverse Proxy (ONLY public entry)
+  # =========================
+  reverse-proxy:
+    image: nginx:alpine
+    container_name: reverse-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - frontend_net
+      - backend_net
+
+  # =========================
+  # DATABASES (internal only)
+  # =========================
   postgresql:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: chatbot_dev
       POSTGRES_USER: chatbot_user
       POSTGRES_PASSWORD: chatbot_password
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U chatbot_user -d chatbot_dev"]
       interval: 30s
@@ -20,11 +49,12 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
+    networks:
+      - data_net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -33,18 +63,19 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.5.0
-    ports:
-      - "6333:6333"
+    restart: unless-stopped
     volumes:
       - qdrant_storage:/qdrant/storage
+    networks:
+      - data_net
 
-  # Application services
+  # =========================
+  # AI Core (internal API)
+  # =========================
   ai-core:
     build:
       context: ./backend
-      dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://chatbot_user:chatbot_password@postgresql:5432/chatbot_dev
       - REDIS_URL=redis://redis:6379/0
@@ -52,8 +83,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - RAG_EMBED_MODEL=text-embedding-3-large
       - RAG_CHAT_MODEL=gpt-4o-mini
-      # JWT secret provided via overlay (docker-compose.vault.yml) as JWT_SECRET_FILE
-      # Auth bypass is disabled by default. Enable only for local dev with docker-compose.dev.yml
     depends_on:
       postgresql:
         condition: service_healthy
@@ -61,61 +90,46 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-    volumes:
-      - ./backend/src:/app/src:ro
+    networks:
+      - backend_net
+      - data_net
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/v1/ready').getcode()==200 else sys.exit(1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/v1/health').getcode()==200 else sys.exit(1)"]
       interval: 30s
       timeout: 10s
       retries: 3
 
+  # =========================
+  # Gateway (internal API)
+  # =========================
   gateway:
     build:
       context: ./gateway
-      dockerfile: Dockerfile
-    ports:
-      - "3001:3001"
+    restart: unless-stopped
     environment:
       - AI_CORE_URL=http://ai-core:8000
       - REDIS_URL=redis://redis:6379/0
-      # JWT secret provided via overlay (docker-compose.vault.yml) as JWT_SECRET_FILE
-      # Auth bypass is disabled by default. Enable only for local dev with docker-compose.dev.yml
     depends_on:
       ai-core:
         condition: service_healthy
-    volumes:
-      - ./gateway/src:/app/src:ro
+    networks:
+      - backend_net
+      - frontend_net
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/healthz"]
+      interval: 15s
+      timeout: 2s
+      retries: 5
+      start_period: 20s
 
-  # Frontend service (for development)
+  # =========================
+  # Frontend (internal only)
+  # =========================
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
+    restart: unless-stopped
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:3001/api
-      - NEXT_PUBLIC_AI_CORE_URL=http://localhost:8000
-      - AI_CORE_URL=http://ai-core:8000
-    depends_on:
-      gateway:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-volumes:
-  postgres_data:
-  redis_data:
-  qdrant_storage:
-
-networks:
-  default:
-    name: chatbot-network
+      - NEXT_PUBLIC_API_URL=/api
+    networks:
+      - frontend_net

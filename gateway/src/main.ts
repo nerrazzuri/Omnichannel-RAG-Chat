@@ -1,4 +1,5 @@
 import './utils/secretLoader';
+import * as http from 'http';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
@@ -11,6 +12,16 @@ import { hostTenant } from './middleware/hostTenant';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  
+  const server = app.getHttpServer() as http.Server;
+
+  // 🔴 RAW LIVENESS PROBE — BYPASSES NEST COMPLETELY
+  server.on('request', (req, res) => {
+    if (req.url === '/healthz') {
+      res.statusCode = 200;
+      res.end('OK');
+    }
+  });
 
   // Enable global validation pipes
   app.useGlobalPipes(new ValidationPipe({
