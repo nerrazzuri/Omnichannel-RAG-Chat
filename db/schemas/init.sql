@@ -1,3 +1,25 @@
+-- =================================================================================================
+-- IMPORTANT: LEGACY TEMPLATE (NOT USED BY RUNTIME)
+-- -------------------------------------------------------------------------------------------------
+-- The application’s canonical tenancy model is:
+--   - Single schema (`public`) for all tenants
+--   - PostgreSQL Row-Level Security (RLS) with ENABLE + FORCE
+--   - Policies keyed to `current_setting('app.tenant_id')::uuid`
+--   - Alembic-managed migrations (see `backend/alembic/versions/*`)
+--   - Write enforcement: policies WITH CHECK + BEFORE INSERT/UPDATE triggers
+--
+-- This file represents an older schema-per-tenant template using a different GUC
+-- (`app.current_tenant_id`). It is retained only for reference and should not be
+-- applied in environments managed by the current application.
+--
+-- Do NOT mix this template with Alembic migrations.
+-- If you need to initialize a database, use Alembic:
+--   alembic upgrade head
+--
+-- To learn more about the canonical tenancy approach, see:
+--   docs/ops/tenancy.md
+-- =================================================================================================
+
 -- Initial database schema for Omnichannel Enterprise RAG Chatbot Platform
 -- Multi-tenant schema design with Row Level Security
 

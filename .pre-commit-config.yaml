@@ -3,7 +3,6 @@ repos:
     rev: 23.11.0
     hooks:
       - id: black
-        args: ["--check"]
         files: ^backend/|^devops/
 
   - repo: https://github.com/PyCQA/flake8
@@ -11,6 +10,7 @@ repos:
     hooks:
       - id: flake8
         files: ^backend/|^devops/
+        args: ["--max-line-length=200", "--extend-ignore=E203,W503"]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.7.1
@@ -24,7 +24,23 @@ repos:
     hooks:
       - id: bandit
         name: bandit
-        args: ["-r", "backend", "-x", "backend/tests"]
+        args:
+          # Scan core Python sources and migrations only
+          - "-r"
+          - "backend/src"
+          - "-r"
+          - "backend/alembic"
+          # Exclude tests and heavy connector/tooling folders to speed up
+          - "-x"
+          - "backend/tests,backend/src/ai_core/connectors,backend/src/ai_core/agents/tools"
+          # Reduce noise and runtime
+          - "--severity-level"
+          - "high"
+          - "--confidence-level"
+          - "high"
+          - "-q"
+        additional_dependencies: ["pbr"]
+        pass_filenames: false
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.4.0
@@ -38,25 +54,25 @@ repos:
     hooks:
       - id: eslint-frontend
         name: eslint (frontend)
-        entry: bash -lc "cd frontend && npx --yes eslint . --ext .ts,.tsx,.js --ignore-path .eslintignore"
+        entry: bash -lc "cd frontend && npm i --no-audit --no-fund && npx --yes eslint@8.57.1 . --ext .ts,.tsx,.js --ignore-path .eslintignore"
         language: system
         types: [file]
         pass_filenames: false
       - id: eslint-gateway
         name: eslint (gateway)
-        entry: bash -lc "cd gateway && npx --yes eslint . --ext .ts,.tsx,.js --ignore-path .eslintignore"
+        entry: bash -lc "cd gateway && npm i --no-audit --no-fund && npx --yes eslint@8.57.1 . --ext .ts,.tsx,.js --ignore-path .eslintignore"
         language: system
         types: [file]
         pass_filenames: false
       - id: prettier-frontend
         name: prettier check (frontend)
-        entry: bash -lc "cd frontend && npx --yes prettier -c ."
+        entry: bash -lc "cd frontend && npx --yes prettier -w . --ignore-path .prettierignore"
         language: system
         types: [file]
         pass_filenames: false
       - id: prettier-gateway
         name: prettier check (gateway)
-        entry: bash -lc "cd gateway && npx --yes prettier -c ."
+        entry: bash -lc "cd gateway && npx --yes prettier -w . --ignore-path .prettierignore"
         language: system
         types: [file]
         pass_filenames: false

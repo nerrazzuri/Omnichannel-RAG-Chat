@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  ai-core:
+    environment:
+      - ENV=prod
+      - DATABASE_URL=${DATABASE_URL_APPUSER:?set DATABASE_URL_APPUSER or DATABASE_URL} # override via env when running with this file
+
+  db-migrate:
+    build:
+      context: ./backend
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL_APPUSER:?set DATABASE_URL_APPUSER}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+      - ENV=prod
+    working_dir: /app
+    command: ["bash", "-lc", "alembic upgrade head"]
+    networks:
+      - backend_net
+      - data_net
+    restart: "no"
+
+networks:
+  backend_net:
+  data_net:
+
+
