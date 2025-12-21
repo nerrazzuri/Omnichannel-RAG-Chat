@@ -2,12 +2,18 @@ import { Request, Response, NextFunction } from 'express';
 import { customDomainRequests } from '../metrics/metrics';
 
 // Simple in-memory cache placeholder; in production, use Redis or DB lookup
-const hostToTenantCache = new Map<string, { tenant_id: string; plan_type: string }>();
+const hostToTenantCache = new Map<
+  string,
+  { tenant_id: string; plan_type: string }
+>();
 
 export function hostTenant() {
   return async function (req: Request, res: Response, next: NextFunction) {
     try {
-      const host = (req.headers['x-forwarded-host'] as string) || (req.headers['host'] as string) || '';
+      const host =
+        (req.headers['x-forwarded-host'] as string) ||
+        (req.headers['host'] as string) ||
+        '';
       let tenantId = (req.headers['x-tenant-id'] as string) || '';
       let planType = (req.headers['x-plan-type'] as string) || '';
 

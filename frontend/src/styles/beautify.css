@@ -1,6 +1,16 @@
-.prose pre code { white-space: pre; }
-.prose blockquote { border-left: 4px solid rgba(148,163,184,0.4); padding-left: 0.75rem; }
-.prose table { width: 100%; border-collapse: collapse; }
-.prose table th, .prose table td { border: 1px solid rgba(226,232,240,1); padding: 0.5rem; }
-
-
+.prose pre code {
+  white-space: pre;
+}
+.prose blockquote {
+  border-left: 4px solid rgba(148, 163, 184, 0.4);
+  padding-left: 0.75rem;
+}
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.prose table th,
+.prose table td {
+  border: 1px solid rgba(226, 232, 240, 1);
+  padding: 0.5rem;
+}

@@ -7,7 +7,13 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import os
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+from prometheus_client import (
+    Counter,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+    REGISTRY,
+)
 from fastapi import Response
 from ai_core.api.v1.query import router as query_router
 from ai_core.api.webhooks.whatsapp import router as whatsapp_router
@@ -51,6 +57,16 @@ from shared.utils.log_and_continue import log_and_continue
 from shared.metrics.exception_metrics import exception_metrics
 from shared.metrics.vault_rotation_metrics import vault_rotation_metrics
 from shared.config.tuning import vault_rotation as vault_rot_cfg
+from ai_core.orchestrator.orchestrator import Orchestrator
+from ai_core.capabilities.search import SearchCapability
+from ai_core.capabilities.answer import AnswerCapability
+from ai_core.capabilities.extract import ExtractCapability
+from ai_core.capabilities.score import ScoreCapability
+from ai_core.capabilities.execute import ExecuteCapability
+from ai_core.capabilities.observe import ObserveCapability
+from ai_core.capabilities.govern import GovernCapability
+from ai_core.capabilities.recommend import RecommendCapability
+from ai_core.registry import CapabilityRegistry, CapabilitySpec
 
 # Optional Sentry init
 try:
@@ -610,14 +626,17 @@ async def lifespan(app: FastAPI):
             log_and_continue(e, "vault.renewal.init", None, None)
 
     t5 = threading.Thread(target=_vault_renewal_loop, daemon=True)
+
     # Retention worker
     def _retention_loop():
         try:
             from ai_core.retention_worker import loop as _rt_loop
+
             _rt_loop(stop_flag)
         except Exception as e:
             stability_metrics.inc_bg_failure("retention_worker")
             log_and_continue(e, "retention.worker", None, None)
+
     t6 = threading.Thread(target=_retention_loop, daemon=True)
     t1.start()
     t2.start()
@@ -673,6 +692,157 @@ async def lifespan(app: FastAPI):
             scheduler_thread.start()
         except Exception:
             pass
+    # Initialize capability singletons and orchestrator
+    try:
+        # Capability instances (stateless)
+        from ai_core.capabilities.signal_inference import SignalInferenceCapability
+
+        app.state.capabilities = {
+            "search": SearchCapability(),
+            "answer": AnswerCapability(),
+            "extract": ExtractCapability(),
+            "score": ScoreCapability(),
+            "recommend": RecommendCapability(),
+            "execute": ExecuteCapability(),
+            "observe": ObserveCapability(),
+            "govern": GovernCapability(),
+            "signal_inference": SignalInferenceCapability(),
+        }
+        # Capability registry with metadata
+        reg = CapabilityRegistry()
+        # Common allowed channels
+        allowed = {"web", "chat", "api", "webhook", "teams", "telegram", "whatsapp"}
+        reg.register(
+            CapabilitySpec(
+                name="search",
+                kind="search",
+                inputs={"query"},
+                outputs={"retrieved"},
+                requires={"tenant_access"},
+                forbids=set(),
+                min_plan="free",
+                allowed_channels=allowed,
+                side_effects=False,
+                description="Retrieve and fuse candidate contexts for a query.",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="answer",
+                kind="answer",
+                inputs={"query", "retrieved"},
+                outputs={"response"},
+                requires={"tenant_access"},
+                forbids=set(),
+                min_plan="free",
+                allowed_channels=allowed,
+                side_effects=False,
+                description="Generate an answer from contexts and format response.",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="extract",
+                kind="extract",
+                inputs={"schema", "query"},
+                outputs={"structured"},
+                requires={"tenant_access"},
+                forbids=set(),
+                min_plan="free",
+                allowed_channels=allowed,
+                side_effects=False,
+                description="Structured extraction for tabular/typed data.",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="score",
+                kind="score",
+                inputs={"retrieved", "query"},
+                outputs={"reranked"},
+                requires={"tenant_access"},
+                forbids=set(),
+                min_plan="free",
+                allowed_channels=allowed,
+                side_effects=False,
+                description="Rerank retrieved contexts with cross-encoder and heuristics.",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="recommend",
+                kind="recommend",
+                inputs={"candidates"},
+                outputs={"items"},
+                requires={"tenant_access"},
+                forbids=set(),
+                min_plan="free",
+                allowed_channels={"chat", "api"},
+                side_effects=False,
+                description="Lightweight recommendation over existing ranked/raw candidates (diversity, suppression, top-K).",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="execute",
+                kind="execute",
+                inputs={"goal", "query"},
+                outputs={"actions"},
+                requires={"tool_execution"},
+                forbids=set(),
+                min_plan="pro",
+                allowed_channels={"web", "chat", "api"},  # webhook blocked by default
+                side_effects=True,
+                description="Execute agent tools and workflows (may have side effects).",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="observe",
+                kind="observe",
+                inputs=set(),
+                outputs=set(),
+                requires=set(),
+                forbids=set(),
+                min_plan="free",
+                allowed_channels=allowed,
+                side_effects=False,
+                description="Feedback/evaluation/audit observation hooks.",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="signal_inference",
+                kind="signal_inference",
+                inputs={"text"},
+                outputs={"inferred_signals"},
+                requires=set(),  # No specific permissions strictly required for internal use, but good to have
+                forbids=set(),
+                min_plan="free",
+                allowed_channels={"api", "internal"},
+                side_effects=False,
+                description="Infer cognitive signals from text (internal use).",
+            )
+        )
+        reg.register(
+            CapabilitySpec(
+                name="govern",
+                kind="govern",
+                inputs={"text"},
+                outputs={"text"},
+                requires=set(),
+                forbids=set(),
+                min_plan="free",
+                allowed_channels=allowed,
+                side_effects=False,
+                description="Policy and redaction pre/post enforcement.",
+            )
+        )
+        app.state.capability_registry = reg
+        app.state.orchestrator = Orchestrator(app.state.capabilities, reg)
+        app_logger.info("Initialized orchestrator and capabilities")
+    except Exception as _cap_e:
+        app_logger.error(f"Capability/orchestrator init failed: {_cap_e}")
     yield
     app_logger.info("Shutting down AI Core service...")
     # Cleanup logic here

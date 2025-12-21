@@ -1,6 +1,6 @@
-import React from 'react';
-import { Message } from '../types/chat';
-import { ChatMessage } from './ChatMessage';
+import React from "react";
+import { Message } from "../types/chat";
+import { ChatMessage } from "./ChatMessage";
 
 type MessageListProps = {
   messages: Message[];
@@ -9,12 +9,17 @@ type MessageListProps = {
   onPromptClick?: (text: string) => void;
 };
 
-export default function MessageList({ messages, loading, onFeedback, onPromptClick }: MessageListProps) {
+export default function MessageList({
+  messages,
+  loading,
+  onFeedback,
+  onPromptClick,
+}: MessageListProps) {
   const starters = [
-    'Summarize last quarter’s performance',
-    'List the top customer questions',
-    'What changed in the latest release notes?',
-    'Draft a response to a refund request'
+    "Summarize last quarter’s performance",
+    "List the top customer questions",
+    "What changed in the latest release notes?",
+    "Draft a response to a refund request",
   ];
 
   return (
@@ -22,7 +27,9 @@ export default function MessageList({ messages, loading, onFeedback, onPromptCli
       {messages.length === 0 && (
         <div className="mx-auto mt-16 max-w-2xl text-center text-gray-700">
           <h3 className="text-2xl font-semibold text-gray-900 mb-2">Welcome</h3>
-          <p className="text-sm text-gray-600">Ask about your uploaded knowledge or try one of these:</p>
+          <p className="text-sm text-gray-600">
+            Ask about your uploaded knowledge or try one of these:
+          </p>
           <div className="mt-4 flex flex-wrap gap-2 justify-center">
             {starters.map((s) => (
               <button
@@ -37,11 +44,7 @@ export default function MessageList({ messages, loading, onFeedback, onPromptCli
         </div>
       )}
       {messages.map((m) => (
-        <ChatMessage
-          key={m.id}
-          message={m}
-          onFeedback={onFeedback}
-        />
+        <ChatMessage key={m.id} message={m} onFeedback={onFeedback} />
       ))}
       {loading && (
         <div className="w-full flex justify-start">
@@ -60,5 +63,3 @@ export default function MessageList({ messages, loading, onFeedback, onPromptCli
     </>
   );
 }
-
-

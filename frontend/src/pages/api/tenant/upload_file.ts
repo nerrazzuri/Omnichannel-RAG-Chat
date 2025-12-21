@@ -1,4 +1,4 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
+import type { NextApiRequest, NextApiResponse } from "next";
 
 export const config = {
   api: {
@@ -7,9 +7,12 @@ export const config = {
   },
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
     return;
   }
   try {
@@ -20,22 +23,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const bodyBuffer = Buffer.concat(chunks);
 
-    const ct = req.headers['content-type'] || 'application/octet-stream';
+    const ct = req.headers["content-type"] || "application/octet-stream";
     // Derive auth from cookies (HttpOnly) or use static admin bearer if configured
-    const cookieBearer = req.cookies?.auth_token ? `Bearer ${req.cookies.auth_token}` : undefined;
-    const staticAuth = process.env.ADMIN_UPLOAD_BEARER ? `Bearer ${process.env.ADMIN_UPLOAD_BEARER}` : undefined;
+    const cookieBearer = req.cookies?.auth_token
+      ? `Bearer ${req.cookies.auth_token}`
+      : undefined;
+    const staticAuth = process.env.ADMIN_UPLOAD_BEARER
+      ? `Bearer ${process.env.ADMIN_UPLOAD_BEARER}`
+      : undefined;
     const authHeader = cookieBearer || staticAuth;
-    const upstream = await fetch((process.env.AI_CORE_URL || 'http://localhost:8000') + '/v1/tenant/upload_file', {
-      method: 'POST',
-      headers: {
-        'Content-Type': Array.isArray(ct) ? ct[0] : ct,
-        ...(authHeader ? { 'Authorization': authHeader } : {}),
+    const upstream = await fetch(
+      (process.env.AI_CORE_URL || "http://localhost:8000") +
+        "/v1/tenant/upload_file",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": Array.isArray(ct) ? ct[0] : ct,
+          ...(authHeader ? { Authorization: authHeader } : {}),
+        },
+        body: bodyBuffer,
       },
-      body: bodyBuffer,
-    });
+    );
 
-    const respCt = upstream.headers.get('content-type') || '';
-    if (respCt.includes('application/json')) {
+    const respCt = upstream.headers.get("content-type") || "";
+    if (respCt.includes("application/json")) {
       const data = await upstream.json();
       res.status(upstream.status).json(data);
     } else {
@@ -46,5 +57,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: e.message });
   }
 }
-
-

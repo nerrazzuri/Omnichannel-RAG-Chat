@@ -98,6 +98,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - ENV=dev
+      - ORCHESTRATOR_ENABLED=1
       - DATABASE_URL=postgresql://chatbot_user:chatbot_password@postgresql:5432/chatbot_dev
       - REDIS_URL=redis://redis:6379/0
       - QDRANT_URL=http://qdrant:6333
@@ -113,6 +114,8 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - AUTH_ALLOW_ALL=1
       - AUTH_BYPASS_TENANT=00000000-0000-0000-0000-000000000001
+    ports:
+      - "8000:8000"
     depends_on:
       vault:
         condition: service_started
@@ -154,7 +157,7 @@ services:
     volumes:
       - ./gateway/src:/app/src:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3

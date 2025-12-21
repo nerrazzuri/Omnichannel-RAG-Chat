@@ -44,5 +44,3 @@ export const customDomainErrors = new Counter({
   help: 'Errors on custom domains',
   labelNames: ['host', 'tenant_id'] as const,
 });
-
-

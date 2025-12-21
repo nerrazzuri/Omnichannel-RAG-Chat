@@ -1,7 +1,7 @@
 name: Deploy Staging
 on:
   push:
-    branches: [ master ]
+    branches: [master]
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -10,7 +10,7 @@ jobs:
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with:
-          version: 'v1.30.2'
+          version: "v1.30.2"
       - name: Kubeconfig
         run: |
           mkdir -p ~/.kube
@@ -21,4 +21,3 @@ jobs:
         run: |
           kubectl apply -f infra/k8s/staging/ai-core-deployment.yaml
           kubectl apply -f infra/k8s/staging/frontend-deployment.yaml
-

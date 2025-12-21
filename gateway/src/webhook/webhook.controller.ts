@@ -1,4 +1,12 @@
-import { Controller, Post, Body, Headers, BadRequestException, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Headers,
+  BadRequestException,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { AuthGuard } from '../auth/auth.guard';
 
@@ -8,9 +16,17 @@ export class WebhookController {
 
   @Post('whatsapp')
   @UseGuards(new AuthGuard('webhook:write'))
-  async handleWhatsApp(@Body() body: any, @Headers() headers: any, @Req() req: any) {
+  async handleWhatsApp(
+    @Body() body: any,
+    @Headers() headers: any,
+    @Req() req: any
+  ) {
     try {
-      return await this.webhookService.processWhatsAppWebhook(body, headers, req.user);
+      return await this.webhookService.processWhatsAppWebhook(
+        body,
+        headers,
+        req.user
+      );
     } catch (error) {
       throw new BadRequestException('Invalid WhatsApp webhook payload');
     }
@@ -38,9 +54,17 @@ export class WebhookController {
 
   @Post('wechat')
   @UseGuards(new AuthGuard('webhook:write'))
-  async handleWeChat(@Body() body: any, @Headers() headers: any, @Req() req: any) {
+  async handleWeChat(
+    @Body() body: any,
+    @Headers() headers: any,
+    @Req() req: any
+  ) {
     try {
-      return await this.webhookService.processWeChatWebhook(body, headers, req.user);
+      return await this.webhookService.processWeChatWebhook(
+        body,
+        headers,
+        req.user
+      );
     } catch (error) {
       throw new BadRequestException('Invalid WeChat webhook payload');
     }
@@ -48,9 +72,17 @@ export class WebhookController {
 
   @Post('line')
   @UseGuards(new AuthGuard('webhook:write'))
-  async handleLine(@Body() body: any, @Headers() headers: any, @Req() req: any) {
+  async handleLine(
+    @Body() body: any,
+    @Headers() headers: any,
+    @Req() req: any
+  ) {
     try {
-      return await this.webhookService.processLineWebhook(body, headers, req.user);
+      return await this.webhookService.processLineWebhook(
+        body,
+        headers,
+        req.user
+      );
     } catch (error) {
       throw new BadRequestException('Invalid LINE webhook payload');
     }

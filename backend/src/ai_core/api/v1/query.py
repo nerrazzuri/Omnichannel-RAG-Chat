@@ -10,7 +10,13 @@ from ai_core.pipeline.rag_pipeline import RAGPipeline
 from ai_core.pipeline.rag_pipeline import RAGPipeline
 from shared.database.session import get_db
 from ai_core.api.deps import require
-from shared.database.models import KnowledgeChunk, Document, KnowledgeBase, Tenant, CostSummary
+from shared.database.models import (
+    KnowledgeChunk,
+    Document,
+    KnowledgeBase,
+    Tenant,
+    CostSummary,
+)
 from shared.plans.registry import resolve_plan_label, get_plan
 from shared.metrics.request_metrics import inc_request
 from ai_core.api.deps import require
@@ -19,6 +25,16 @@ import logging
 import csv, io
 import uuid
 import re
+import os
+import asyncio
+
+# Orchestrator (capability-based) imports
+from ai_core.contracts.capability_request import CapabilityRequest
+from ai_core.orchestrator.orchestrator import Orchestrator
+from ai_core.capabilities.search import SearchCapability
+from ai_core.capabilities.answer import AnswerCapability
+from ai_core.capabilities.extract import ExtractCapability
+from ai_core.capabilities.score import ScoreCapability
 
 router = APIRouter(prefix="/v1", tags=["query"])
 
@@ -26,7 +42,7 @@ rag_pipeline = RAGPipeline()
 
 
 @router.post("/query", response_model=QueryResponse)
-def post_query(
+async def post_query(
     payload: QueryRequest,
     request: Request,
     claims=Depends(require("retrieval:read", resource={"classification": "internal"})),
@@ -120,6 +136,77 @@ def post_query(
     # Load mutable conversation context (persist short-term memory like last person asked)
     convo_ctx = dict(conversation.context or {})
 
+    # ---------------- Orchestrator feature flag short-circuit ----------------
+    if os.getenv("ORCHESTRATOR_ENABLED", "false").lower() in {"1", "true", "yes"}:
+        try:
+            # Resolve plan label early for orchestrator gating
+            try:
+                t = db.query(Tenant).filter(Tenant.id == tenant_uuid).first()
+                plan_label = resolve_plan_label(getattr(t, "subscription_tier", None))
+            except Exception:
+                plan_label = "free"
+            allow_tools = plan_label in ("pro", "enterprise")
+            # Build CapabilityRequest
+            cap_req = CapabilityRequest(
+                tenant_id=str(tenant_uuid),
+                user_id=str(claims.get("user_id") or user_uuid),
+                roles=[str(claims.get("role"))] if claims.get("role") else [],
+                channel=payload.channel,
+                input={"query": payload.message},
+                context={
+                    "conversation_id": str(getattr(conversation, "id", "")),
+                    "flow": (payload.context or {}).get("flow"),
+                    "plan": plan_label,
+                    "tenant_access": True,
+                },
+                constraints={
+                    "plan": plan_label,
+                    "tenant_access": True,
+                    "allow_tools": allow_tools,
+                },
+                trace_id=getattr(request.state, "correlation_id", None)
+                if request
+                else None,
+            )
+            # Use singletons from app state
+            orch = getattr(request.app.state, "orchestrator", None)
+            if orch is None:
+                # Fallback (should not happen): create minimal capabilities map once
+                capabilities = {
+                    "search": SearchCapability(),
+                    "answer": AnswerCapability(),
+                    "extract": ExtractCapability(),
+                    "score": ScoreCapability(),
+                }
+                orch = Orchestrator(capabilities)
+            cap_res = await orch.run(cap_req)
+            payload_out = (
+                cap_res.payload
+                if isinstance(cap_res.payload, dict)
+                else {"response": str(cap_res.payload)}
+            )
+            # Persist assistant reply
+            try:
+                conversation_service.add_message(
+                    conversation,
+                    sender_type="SYSTEM",
+                    content=str(payload_out.get("response", "")),
+                )
+            except Exception:
+                pass
+            return QueryResponse(**payload_out)
+        except Exception as e:
+            # If orchestrator path fails for any reason, fall back to legacy logic below
+            logging.getLogger(__name__).exception(
+                "orchestrator_path_failed",
+                extra={
+                    "tenant_id": str(tenant_uuid),
+                    "trace_id": getattr(request.state, "correlation_id", None),
+                    "flow": (payload.context or {}).get("flow") or "default",
+                    "exc": e.__class__.__name__,
+                },
+            )
+
     # Helpers for normalization and matching
     def norm_col(s: str) -> str:
         s = s.strip().lower().replace("\ufeff", "")
@@ -190,7 +277,10 @@ def post_query(
             start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
             rows = (
                 db.query(CostSummary.tokens_in, CostSummary.tokens_out)
-                .filter(CostSummary.tenant_id == str(tenant_uuid), CostSummary.window_start >= start)
+                .filter(
+                    CostSummary.tenant_id == str(tenant_uuid),
+                    CostSummary.window_start >= start,
+                )
                 .all()
             )
             used = 0
@@ -211,7 +301,10 @@ def post_query(
                     )
                 except Exception:
                     pass
-                raise HTTPException(status_code=403, detail="Monthly token quota reached. Upgrade to Pro for higher limits.")
+                raise HTTPException(
+                    status_code=403,
+                    detail="Monthly token quota reached. Upgrade to Pro for higher limits.",
+                )
     except HTTPException:
         raise
     except Exception:

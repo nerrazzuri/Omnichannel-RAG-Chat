@@ -1,4 +1,10 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { verifyToken } from './jwt.util';
 
 @Injectable()
@@ -11,7 +17,9 @@ export class AuthGuard implements CanActivate {
 
     // Allow anonymous webhooks only in dev/local/test when explicitly enabled
     const env = (process.env.ENV || 'dev').toLowerCase();
-    const allowAnon = ['dev', 'local', 'test'].includes(env) && (process.env.ALLOW_ANON_WEBHOOKS || '').toLowerCase() === '1';
+    const allowAnon =
+      ['dev', 'local', 'test'].includes(env) &&
+      (process.env.ALLOW_ANON_WEBHOOKS || '').toLowerCase() === '1';
 
     if (!auth) {
       if (allowAnon) return true;
@@ -31,7 +39,9 @@ export class AuthGuard implements CanActivate {
     // Basic RBAC: if requiredScope provided, ensure role ADMIN or scopes include it
     if (this.requiredScope) {
       const role = String(claims.role || '').toUpperCase();
-      const scopes: string[] = Array.isArray(claims.scopes) ? claims.scopes : [];
+      const scopes: string[] = Array.isArray(claims.scopes)
+        ? claims.scopes
+        : [];
       if (role !== 'ADMIN' && !scopes.includes(this.requiredScope)) {
         throw new ForbiddenException('Forbidden');
       }

@@ -2,24 +2,34 @@ export type AdminConfig = { apiBase: string; token: string };
 
 function headers(token: string) {
   return {
-    'Content-Type': 'application/json',
-    Authorization: token ? `Bearer ${token}` : '',
+    "Content-Type": "application/json",
+    Authorization: token ? `Bearer ${token}` : "",
   } as Record<string, string>;
 }
 
 export async function getFeatures(cfg: AdminConfig, tenantId: string) {
-  const r = await fetch(`${cfg.apiBase}/v1/admin/features/get?tenant_id=${encodeURIComponent(tenantId)}`, {
-    headers: headers(cfg.token),
-  });
+  const r = await fetch(
+    `${cfg.apiBase}/v1/admin/features/get?tenant_id=${encodeURIComponent(tenantId)}`,
+    {
+      headers: headers(cfg.token),
+    },
+  );
   if (!r.ok) throw new Error(`features get failed: ${r.status}`);
   return r.json();
 }
 
-export async function setFeatures(cfg: AdminConfig, tenantId: string, webSearchEnabled: boolean) {
+export async function setFeatures(
+  cfg: AdminConfig,
+  tenantId: string,
+  webSearchEnabled: boolean,
+) {
   const r = await fetch(`${cfg.apiBase}/v1/admin/features/set`, {
-    method: 'POST',
+    method: "POST",
     headers: headers(cfg.token),
-    body: JSON.stringify({ tenant_id: tenantId, web_search_enabled: webSearchEnabled }),
+    body: JSON.stringify({
+      tenant_id: tenantId,
+      web_search_enabled: webSearchEnabled,
+    }),
   });
   if (!r.ok) throw new Error(`features set failed: ${r.status}`);
   return r.json();
@@ -34,16 +44,27 @@ export async function listTenants(cfg: AdminConfig) {
 }
 
 export async function getTenantSummary(cfg: AdminConfig, tenantId: string) {
-  const r = await fetch(`${cfg.apiBase}/v1/admin/tenants/summary?tenant_id=${encodeURIComponent(tenantId)}`, {
-    headers: headers(cfg.token),
-  });
+  const r = await fetch(
+    `${cfg.apiBase}/v1/admin/tenants/summary?tenant_id=${encodeURIComponent(tenantId)}`,
+    {
+      headers: headers(cfg.token),
+    },
+  );
   if (!r.ok) throw new Error(`tenant summary failed: ${r.status}`);
   return r.json();
 }
 
-export async function createTenant(cfg: AdminConfig, body: { name: string; domain: string; subscription_tier?: string; settings?: Record<string, any> }) {
+export async function createTenant(
+  cfg: AdminConfig,
+  body: {
+    name: string;
+    domain: string;
+    subscription_tier?: string;
+    settings?: Record<string, any>;
+  },
+) {
   const r = await fetch(`${cfg.apiBase}/v1/admin/tenants/create`, {
-    method: 'POST',
+    method: "POST",
     headers: headers(cfg.token),
     body: JSON.stringify(body),
   });
@@ -51,37 +72,70 @@ export async function createTenant(cfg: AdminConfig, body: { name: string; domai
   return r.json();
 }
 
-export async function listApprovals(cfg: AdminConfig, tenantId: string, status?: string) {
-  const qs = new URLSearchParams({ tenant_id: tenantId, ...(status ? { status } : {}) });
-  const r = await fetch(`${cfg.apiBase}/v1/agent/approvals/list?${qs.toString()}`, { headers: headers(cfg.token) });
+export async function listApprovals(
+  cfg: AdminConfig,
+  tenantId: string,
+  status?: string,
+) {
+  const qs = new URLSearchParams({
+    tenant_id: tenantId,
+    ...(status ? { status } : {}),
+  });
+  const r = await fetch(
+    `${cfg.apiBase}/v1/agent/approvals/list?${qs.toString()}`,
+    { headers: headers(cfg.token) },
+  );
   if (!r.ok) throw new Error(`approvals list failed: ${r.status}`);
   return r.json();
 }
 
-export async function decideApproval(cfg: AdminConfig, approvalId: string, decision: 'approved' | 'denied', reason?: string, decidedBy?: string) {
+export async function decideApproval(
+  cfg: AdminConfig,
+  approvalId: string,
+  decision: "approved" | "denied",
+  reason?: string,
+  decidedBy?: string,
+) {
   const r = await fetch(`${cfg.apiBase}/v1/agent/approvals/decide`, {
-    method: 'POST',
+    method: "POST",
     headers: headers(cfg.token),
-    body: JSON.stringify({ approval_id: approvalId, status: decision, reason, decided_by: decidedBy }),
+    body: JSON.stringify({
+      approval_id: approvalId,
+      status: decision,
+      reason,
+      decided_by: decidedBy,
+    }),
   });
   if (!r.ok) throw new Error(`approval decide failed: ${r.status}`);
   return r.json();
 }
 
-export async function listRetentionPolicies(cfg: AdminConfig, tenantId: string) {
-  const r = await fetch(`${cfg.apiBase}/v1/admin/retention/policies?tenant_id=${encodeURIComponent(tenantId)}`, {
-    headers: headers(cfg.token),
-  });
+export async function listRetentionPolicies(
+  cfg: AdminConfig,
+  tenantId: string,
+) {
+  const r = await fetch(
+    `${cfg.apiBase}/v1/admin/retention/policies?tenant_id=${encodeURIComponent(tenantId)}`,
+    {
+      headers: headers(cfg.token),
+    },
+  );
   if (!r.ok) throw new Error(`retention list failed: ${r.status}`);
   return r.json();
 }
 
 export async function updateRetentionPolicy(
   cfg: AdminConfig,
-  body: { tenant_id: string; data_type: string; max_age_days: number; archive_before_delete: boolean; encryption_required?: boolean }
+  body: {
+    tenant_id: string;
+    data_type: string;
+    max_age_days: number;
+    archive_before_delete: boolean;
+    encryption_required?: boolean;
+  },
 ) {
   const r = await fetch(`${cfg.apiBase}/v1/admin/retention/update`, {
-    method: 'POST',
+    method: "POST",
     headers: headers(cfg.token),
     body: JSON.stringify(body),
   });
@@ -91,13 +145,13 @@ export async function updateRetentionPolicy(
 
 export async function getGatewayHealth() {
   const r = await fetch(`/api/health/gateway`);
-  const j = await r.json().catch(() => ({} as any));
+  const j = await r.json().catch(() => ({}) as any);
   return { ok: !!j.ok, status: j.status ?? r.status };
 }
 
 export async function getAiCoreHealth() {
   const r = await fetch(`/api/health/ai_core`);
-  const j = await r.json().catch(() => ({} as any));
+  const j = await r.json().catch(() => ({}) as any);
   return { ok: !!j.ok, status: j.status ?? r.status };
 }
 
@@ -108,5 +162,3 @@ export async function getComplianceSummary(cfg: AdminConfig) {
   if (!r.ok) throw new Error(`compliance summary failed: ${r.status}`);
   return r.json();
 }
-
-

@@ -9,7 +9,11 @@ export class WebhookService {
 
   constructor(private configService: ConfigService) {}
 
-  async processWhatsAppWebhook(body: any, headers: any, claims?: any): Promise<any> {
+  async processWhatsAppWebhook(
+    body: any,
+    headers: any,
+    claims?: any
+  ): Promise<any> {
     this.logger.log('Processing WhatsApp webhook');
 
     // Verify webhook signature if provided
@@ -21,7 +25,11 @@ export class WebhookService {
     const normalizedMessage = this.normalizeWhatsAppMessage(body);
 
     // Forward to AI Core service
-    await this.forwardToAICore(normalizedMessage, claims, headers['authorization']);
+    await this.forwardToAICore(
+      normalizedMessage,
+      claims,
+      headers['authorization']
+    );
 
     return { status: 'ok', message: 'WhatsApp webhook processed' };
   }
@@ -44,20 +52,36 @@ export class WebhookService {
     return { status: 'ok', message: 'Telegram webhook processed' };
   }
 
-  async processWeChatWebhook(body: any, headers: any, claims?: any): Promise<any> {
+  async processWeChatWebhook(
+    body: any,
+    headers: any,
+    claims?: any
+  ): Promise<any> {
     this.logger.log('Processing WeChat webhook');
 
     const normalizedMessage = this.normalizeWeChatMessage(body);
-    await this.forwardToAICore(normalizedMessage, claims, headers['authorization']);
+    await this.forwardToAICore(
+      normalizedMessage,
+      claims,
+      headers['authorization']
+    );
 
     return { status: 'ok', message: 'WeChat webhook processed' };
   }
 
-  async processLineWebhook(body: any, headers: any, claims?: any): Promise<any> {
+  async processLineWebhook(
+    body: any,
+    headers: any,
+    claims?: any
+  ): Promise<any> {
     this.logger.log('Processing LINE webhook');
 
     const normalizedMessage = this.normalizeLineMessage(body);
-    await this.forwardToAICore(normalizedMessage, claims, headers['authorization']);
+    await this.forwardToAICore(
+      normalizedMessage,
+      claims,
+      headers['authorization']
+    );
 
     return { status: 'ok', message: 'LINE webhook processed' };
   }
@@ -78,9 +102,10 @@ export class WebhookService {
       content: message.text?.body || '',
       message_type: this.getWhatsAppMessageType(message),
       metadata: {
-        display_phone_number: entry?.changes?.[0]?.value?.metadata?.display_phone_number,
+        display_phone_number:
+          entry?.changes?.[0]?.value?.metadata?.display_phone_number,
         phone_number_id: entry?.changes?.[0]?.value?.metadata?.phone_number_id,
-      }
+      },
     };
   }
 
@@ -96,7 +121,7 @@ export class WebhookService {
       metadata: {
         conversation_id: body.conversation?.id,
         service_url: body.serviceUrl,
-      }
+      },
     };
   }
 
@@ -117,7 +142,7 @@ export class WebhookService {
       message_type: this.getTelegramMessageType(message),
       metadata: {
         username: message.from?.username,
-      }
+      },
     };
   }
 
@@ -131,7 +156,7 @@ export class WebhookService {
       message_type: body.MsgType || 'text',
       metadata: {
         to_user: body.ToUserName,
-      }
+      },
     };
   }
 
@@ -152,7 +177,7 @@ export class WebhookService {
       metadata: {
         reply_token: event.replyToken,
         source_type: event.source?.type,
-      }
+      },
     };
   }
 
@@ -187,8 +212,14 @@ export class WebhookService {
     }
   }
 
-  private async forwardToAICore(message: any, claims?: any, authHeader?: string): Promise<void> {
-    this.logger.log(`Forwarding message to AI Core: ${JSON.stringify(message)}`);
+  private async forwardToAICore(
+    message: any,
+    claims?: any,
+    authHeader?: string
+  ): Promise<void> {
+    this.logger.log(
+      `Forwarding message to AI Core: ${JSON.stringify(message)}`
+    );
     try {
       const aiCoreUrl = process.env.AI_CORE_URL || 'http://ai-core:8000';
       const headers: any = { 'Content-Type': 'application/json' };
@@ -199,7 +230,9 @@ export class WebhookService {
       headers['X-Tenant-ID'] = String(claims.tenant_id);
       // Correlation can be set by proxy if available
       if (!headers['X-Correlation-ID']) {
-        headers['X-Correlation-ID'] = (Math.random() + 1).toString(36).substring(2);
+        headers['X-Correlation-ID'] = (Math.random() + 1)
+          .toString(36)
+          .substring(2);
       }
       // Enqueue for background processing; on failure fallback synchronously or 503
       const job = {
@@ -217,7 +250,9 @@ export class WebhookService {
           await axios.post(`${aiCoreUrl}/v1/query`, job.body, { headers });
         } catch (e) {
           const err: any = e;
-          throw new Error(`Service unavailable: ${err?.message || 'queue+sync failed'}`);
+          throw new Error(
+            `Service unavailable: ${err?.message || 'queue+sync failed'}`
+          );
         }
       }
     } catch (error) {

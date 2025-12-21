@@ -10,11 +10,11 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   async rewrites() {
-    const gwOrigin = process.env.NEXT_GATEWAY_ORIGIN || 'http://localhost:3001';
-    const base = gwOrigin.endsWith('/') ? gwOrigin.slice(0, -1) : gwOrigin;
+    const gwOrigin = process.env.NEXT_GATEWAY_ORIGIN || "http://localhost:3001";
+    const base = gwOrigin.endsWith("/") ? gwOrigin.slice(0, -1) : gwOrigin;
     return [
       {
-        source: '/api/:path*',
+        source: "/api/:path*",
         destination: `${base}/api/:path*`, // Gateway service
       },
     ];

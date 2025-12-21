@@ -1,3 +1,1 @@
-export * from './beautify/index';
-
-
+export * from "./beautify/index";

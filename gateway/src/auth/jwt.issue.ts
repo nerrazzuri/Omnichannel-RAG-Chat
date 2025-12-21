@@ -40,8 +40,9 @@ export function issueToken(input: IssueTokenInput): string {
     iat: now,
   };
   const expires: any = input.expiresIn || '24h';
-  const opts: SignOptions = ({ algorithm: 'HS256', expiresIn: expires } as unknown) as SignOptions;
+  const opts: SignOptions = {
+    algorithm: 'HS256',
+    expiresIn: expires,
+  } as unknown as SignOptions;
   return jwt.sign(payload, secret as Secret, opts);
 }
-
-

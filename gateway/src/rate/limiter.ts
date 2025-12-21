@@ -7,7 +7,8 @@ export function redisRateLimit(maxPerMinute: number) {
     try {
       const r = getRedis();
       if (!r) return next();
-      const ip = (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
+      const ip =
+        (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
       const minute = Math.floor(Date.now() / 60000);
       const key = `rate:ip:${ip}:${minute}`;
       const val = await r.incr(key);
@@ -15,7 +16,9 @@ export function redisRateLimit(maxPerMinute: number) {
         await r.expire(key, 60);
       }
       if (val > maxPerMinute) {
-        try { rateLimitHits.labels(req.path || '/').inc(); } catch {}
+        try {
+          rateLimitHits.labels(req.path || '/').inc();
+        } catch {}
         return res.status(429).json({ detail: 'Rate limit exceeded' });
       }
       next();
@@ -24,5 +27,3 @@ export function redisRateLimit(maxPerMinute: number) {
     }
   };
 }
-
-

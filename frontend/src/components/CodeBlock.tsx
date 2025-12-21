@@ -1,6 +1,9 @@
-import React from 'react';
+import React from "react";
 
-type Props = React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+type Props = React.DetailedHTMLProps<
+  React.HTMLAttributes<HTMLElement>,
+  HTMLElement
+> & {
   inline?: boolean;
   className?: string;
   children?: React.ReactNode;
@@ -8,20 +11,33 @@ type Props = React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElem
 
 export default function CodeBlock(props: Props) {
   const { inline, className, children, ...rest } = props;
-  const code = String(children || '');
-  const match = /language-(\w+)/.exec(className || '');
+  const code = String(children || "");
+  const match = /language-(\w+)/.exec(className || "");
   if (inline) {
-    return <code className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-800" {...rest}>{children}</code>;
+    return (
+      <code
+        className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-800"
+        {...rest}
+      >
+        {children}
+      </code>
+    );
   }
-  const text = code.replace(/\n$/, '');
-  const langClass = match ? `language-${match[1]}` : (className || '');
+  const text = code.replace(/\n$/, "");
+  const langClass = match ? `language-${match[1]}` : className || "";
   const onCopy = async () => {
-    try { await navigator.clipboard.writeText(text); } catch {}
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {}
   };
   return (
     <div className="relative group">
-      <div className="absolute -top-2 left-3 bg-white text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600">Example</div>
-      <pre className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${langClass}`}>
+      <div className="absolute -top-2 left-3 bg-white text-[10px] px-1.5 py-0.5 rounded border border-gray-200 text-gray-600">
+        Example
+      </div>
+      <pre
+        className={`rounded-lg border border-gray-200 bg-gray-50 p-3 overflow-x-auto ${langClass}`}
+      >
         <code className={langClass}>{text}</code>
       </pre>
       <button
@@ -35,5 +51,3 @@ export default function CodeBlock(props: Props) {
     </div>
   );
 }
-
-

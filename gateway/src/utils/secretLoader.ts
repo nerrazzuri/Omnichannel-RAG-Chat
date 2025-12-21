@@ -12,5 +12,3 @@ try {
 } catch {
   // ignore
 }
-
-
