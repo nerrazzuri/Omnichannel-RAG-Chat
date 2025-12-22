@@ -114,6 +114,7 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - AUTH_ALLOW_ALL=1
       - AUTH_BYPASS_TENANT=00000000-0000-0000-0000-000000000001
+      - AI_CORE_INTERNAL_SECRET=${AI_CORE_INTERNAL_SECRET:-dev-internal-secret-123}
     ports:
       - "8000:8000"
     depends_on:

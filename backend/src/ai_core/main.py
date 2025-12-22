@@ -249,7 +249,21 @@ async def lifespan(app: FastAPI):
                 import pathlib as _pl
 
                 base = _pl.Path(__file__).resolve().parents[3]  # backend/
-                cfg = _AlConfig(str(base / "alembic.ini"))
+                
+                # Dynamic discovery of alembic.ini to support Docker/Local path diffs
+                here = _pl.Path(__file__).resolve()
+                alembic_ini = None
+                for parent in here.parents:
+                    candidate = parent / "alembic.ini"
+                    if candidate.exists():
+                        alembic_ini = candidate
+                        break
+
+                if not alembic_ini:
+                    # Fallback for some dev setups or log details
+                    raise RuntimeError(f"alembic.ini not found in any parent of {here}")
+
+                cfg = _AlConfig(str(alembic_ini))
                 _alcmd.upgrade(cfg, "head")
             except Exception as _e:
                 app_logger.error(f"Alembic upgrade failed: {_e}")

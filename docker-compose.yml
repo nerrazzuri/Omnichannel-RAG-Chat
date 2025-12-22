@@ -5,10 +5,12 @@ networks:
   frontend_net:
   data_net:
 
+
 volumes:
   postgres_data:
   redis_data:
   qdrant_storage:
+
 
 services:
 
@@ -28,6 +30,8 @@ services:
     networks:
       - frontend_net
       - backend_net
+    depends_on:
+      - gateway
 
   # =========================
   # DATABASES (internal only)
@@ -44,7 +48,7 @@ services:
     networks:
       - data_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chatbot_user -d chatbot_dev"]
+      test: [ "CMD-SHELL", "pg_isready -U chatbot_user -d chatbot_dev" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -52,13 +56,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    command: [ "redis-server", "--appendonly", "yes" ]
     volumes:
       - redis_data:/data
     networks:
       - data_net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -96,7 +100,7 @@ services:
       - backend_net
       - data_net
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/v1/health').getcode()==200 else sys.exit(1)"]
+      test: [ "CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/v1/health').getcode()==200 else sys.exit(1)" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -118,7 +122,7 @@ services:
       - backend_net
       - frontend_net
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3001/healthz"]
+      test: [ "CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3001/healthz" ]
       interval: 15s
       timeout: 2s
       retries: 5
